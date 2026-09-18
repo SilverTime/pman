@@ -1,6 +1,7 @@
 import {
   AllowRule,
   Client,
+  DimensionStatus,
   HarnessSummary,
   SiteSummary,
   siteDetails,
@@ -84,6 +85,66 @@ export function connectionHost(site: SiteSummary) {
   } catch {
     return "本机保存";
   }
+}
+/** Badge tone for a status-dimension state. Unknown states stay cautious. */
+export function dimensionTone(state: string): string {
+  switch (state) {
+    case "verified":
+    case "ready":
+    case "granted":
+    case "saved":
+      return "success";
+    case "unchecked":
+    case "none":
+    case "not_available":
+    case "not_granted":
+      return "neutral";
+    case "stale":
+    case "expired":
+    case "unauthorized":
+    case "forbidden":
+    case "rate_limited":
+    case "restricted":
+    case "paused":
+    case "invalid":
+    case "client_invalid":
+      return "warning";
+    default:
+      return "danger";
+  }
+}
+export type DimensionKey = "credential" | "identity" | "api" | "web" | "clients";
+export const statusDimensions: { key: DimensionKey; name: string }[] = [
+  { key: "credential", name: "凭据保存" },
+  { key: "identity", name: "身份验证" },
+  { key: "api", name: "接口可用性" },
+  { key: "clients", name: "客户端授权" },
+  { key: "web", name: "网页操作" },
+];
+export function dimensionSummary(
+  dimension?: DimensionStatus,
+): {
+  label: string;
+  tone: string;
+  detail: string;
+  checked_at?: string;
+  error_code?: string;
+  recovery?: string;
+} {
+  if (!dimension)
+    return {
+      label: "尚未检查",
+      tone: "neutral",
+      detail: "还没有可用的状态信息。",
+    };
+  return {
+    label: dimension.label,
+    tone: dimensionTone(dimension.state),
+    detail: dimension.detail,
+    checked_at: dimension.checked_at,
+    error_code: dimension.error_code,
+    recovery: dimension.recovery,
+  };
 }
 export function accountLabel(site: SiteSummary) {
   const details = siteDetails(site);

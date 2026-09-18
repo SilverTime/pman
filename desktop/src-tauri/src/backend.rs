@@ -209,13 +209,14 @@ pub fn application_exit(
 pub fn list_sites(window: WebviewWindow, state: State<Shared>) -> Result<Vec<Value>, String> {
     let _guard = admin(&window, &state)?;
     let core = state.core.lock().map_err(|_| "服务状态不可用")?;
+    let statuses = core.vault.connection_statuses().map_err(safe_error)?;
     core.vault
         .list_sites()
         .map_err(safe_error)?
         .into_iter()
         .map(|site| {
             let details = core.vault.details(&site.alias).map_err(safe_error)?;
-            let mut value = serde_json::to_value(site).map_err(|_| "无法读取连接")?;
+            let mut value = serde_json::to_value(&site).map_err(|_| "无法读取连接")?;
             if let Some(status) = details.extra.get("status") {
                 value["status"] = status.clone();
             }
@@ -223,9 +224,36 @@ pub fn list_sites(window: WebviewWindow, state: State<Shared>) -> Result<Vec<Val
                 value["last_checked_at"] = checked.clone();
             }
             value["details"] = serde_json::to_value(details).map_err(|_| "无法读取连接")?;
+            if let Some(dimensions) = statuses.iter().find(|s| s.alias == site.alias) {
+                value["dimensions"] =
+                    serde_json::to_value(dimensions).map_err(|_| "无法读取连接状态")?;
+            }
             Ok(value)
         })
         .collect()
+}
+
+/// Five-dimension status report for one connection, merged with the service
+/// state so the UI can keep "管理界面已锁定" and "API 可用" separate.
+#[tauri::command]
+pub fn connection_status(
+    alias: String,
+    window: WebviewWindow,
+    state: State<Shared>,
+) -> Result<Value, String> {
+    let _guard = admin(&window, &state)?;
+    let core = state.core.lock().map_err(|_| "服务状态不可用")?;
+    let running = core.vault.unlocked();
+    let mut status =
+        serde_json::to_value(core.vault.connection_status(&alias).map_err(safe_error)?)
+            .map_err(safe_error)?;
+    let management = state.management.lock().map_err(|_| "管理状态不可用")?;
+    status["service"] = json!({
+        "management_locked": !management.authenticated,
+        "service_paused": management.persistent.service_paused,
+        "service_running": running && !management.persistent.service_paused,
+    });
+    Ok(status)
 }
 #[tauri::command]
 pub fn site_add(

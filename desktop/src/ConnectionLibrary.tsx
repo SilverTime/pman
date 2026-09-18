@@ -10,10 +10,12 @@ import {
   AuditEntry,
   Client,
   ConnectionCheck,
+  ConnectionStatus,
   HarnessSummary,
   SiteInput,
   SiteSummary,
   call,
+  errorCodeInfo,
   errorText,
   siteDetails,
   statusLabel,
@@ -26,8 +28,10 @@ import {
   connectionAbility,
   connectionGrants,
   connectionHost,
+  dimensionSummary,
   expired,
   needsAttention,
+  statusDimensions,
   wholeConnection,
 } from "./connections";
 import { Badge, Empty, Icon, IconButton, Modal, Notice, useAction } from "./ui";
@@ -472,6 +476,9 @@ export function ConnectionLibrary({
                 </section>
               </div>
             )}
+            {tab === "overview" && (
+              <StatusPanel dimensions={current.dimensions} />
+            )}
             {tab !== "activity" && (
               <section className="library-panel access-summary">
                 <header>
@@ -852,14 +859,59 @@ export function ConnectionLibrary({
   );
 }
 
+/**
+ * Five-dimension status detail. Rendered from backend-computed dimensions;
+ * a missing dimension always shows 尚未检查 instead of assumed health.
+ */
+export function StatusPanel({
+  dimensions,
+}: {
+  dimensions?: ConnectionStatus;
+}) {
+  return (
+    <section className="library-panel status-panel" aria-label="状态明细">
+      <header>
+        <div>
+          <h2>状态明细</h2>
+          <p>保存、验证、授权是不同的证据；未验证的维度不会标记为可用。</p>
+        </div>
+      </header>
+      <div className="status-rows">
+        {statusDimensions.map(({ key, name }) => {
+          const info = dimensionSummary(dimensions?.[key]);
+          return (
+            <div className="status-row" key={key}>
+              <span className="status-name">{name}</span>
+              <Badge tone={info.tone}>{info.label}</Badge>
+              <div className="status-text">
+                <p>{info.detail}</p>
+                <small>
+                  {info.checked_at
+                    ? `检查于 ${timestamp(info.checked_at)}`
+                    : "尚未检查"}
+                  {info.error_code
+                    ? ` · ${errorCodeInfo(info.error_code).text}`
+                    : ""}
+                </small>
+              </div>
+              {info.recovery && (
+                <span className="status-recovery">{info.recovery}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function RecentActivity({
   entries,
   sites,
 }: {
   entries: AuditEntry[];
   sites: SiteSummary[];
-}) {
-  if (!entries.length)
+}) {  if (!entries.length)
     return (
       <div className="quiet-empty">
         <Icon name="activity" size={22} />

@@ -3,6 +3,8 @@ import {
   AssistanceRequest,
   AuditEntry,
   Client,
+  ConnectionStatus,
+  DimensionStatus,
   HarnessSummary,
   SiteSummary,
   VaultStatus,
@@ -10,6 +12,25 @@ import {
 
 // Explicit browser-only, read-only visual preview. No credentials or live connection data.
 const date = "2026-09-15T09:36:00+08:00";
+
+const dim = (
+  state: string,
+  label: string,
+  detail: string,
+  extra?: Partial<DimensionStatus>,
+): DimensionStatus => ({ state, label, detail, ...extra });
+
+/** Synthetic status dimensions so the preview shows the contract honestly. */
+const status = (alias: string, patch: Partial<ConnectionStatus>): ConnectionStatus => ({
+  alias,
+  credential: dim("saved", "已保存", "凭据已加密保存在本机保险库。"),
+  identity: dim("unchecked", "尚未检查", "还没有用远端只读接口验证过此账号身份。"),
+  api: dim("not_granted", "未授权 AI", "还没有任何 AI 客户端被允许使用此连接。"),
+  web: dim("not_available", "尚未接入", "AI 网页操作通道尚未提供；已保存的登录会话仅供接口调用。"),
+  clients: dim("none", "未授权", "没有客户端被允许使用此连接。"),
+  ...patch,
+});
+
 export const previewData: {
   status: VaultStatus;
   sites: SiteSummary[];
@@ -53,6 +74,10 @@ export const previewData: {
       updated_at: date,
       last_used_at: date,
       status: "active",
+      dimensions: status("github", {
+        api: dim("unchecked", "尚未检查", "已授权，但还没有通过本机代理验证或真实调用记录。"),
+        clients: dim("granted", "1 个客户端已授权", "授权持续到撤销；拒绝规则继续生效。"),
+      }),
     },
     {
       id: "sample-notion",
@@ -65,6 +90,14 @@ export const previewData: {
       created_at: date,
       updated_at: date,
       status: "expired",
+      dimensions: status("notion", {
+        credential: dim(
+          "expired",
+          "需重新登录",
+          "凭据有效期已过，需要重新验证。",
+          { error_code: "session_expired", recovery: "重新登录或更新凭据" },
+        ),
+      }),
     },
     {
       id: "sample-e10",
@@ -87,6 +120,15 @@ export const previewData: {
       last_used_at: date,
       last_checked_at: date,
       status: "connected",
+      dimensions: status("e10-test", {
+        identity: dim("verified", "身份已验证", "远端确认账号身份：developer@example.test。", {
+          checked_at: date,
+        }),
+        api: dim("ready", "本机检查通过", "通过本机代理的只读检查请求成功返回。", {
+          checked_at: date,
+        }),
+        clients: dim("granted", "1 个客户端已授权", "授权持续到撤销；拒绝规则继续生效。"),
+      }),
     },
     {
       id: "sample-git",
@@ -106,6 +148,12 @@ export const previewData: {
       updated_at: date,
       last_used_at: date,
       status: "active",
+      dimensions: status("gitlab", {
+        api: dim("ready", "最近调用正常", "最近真实 AI 调用（GET /api/v4/projects）返回 200。", {
+          checked_at: date,
+        }),
+        clients: dim("granted", "1 个客户端已授权", "授权持续到撤销；拒绝规则继续生效。"),
+      }),
     },
     {
       id: "sample-work",
@@ -123,6 +171,11 @@ export const previewData: {
       created_at: date,
       updated_at: date,
       status: "active",
+      dimensions: status("work-mail", {
+        identity: dim("not_available", "不适用", "个人密码不做身份验证。"),
+        api: dim("not_available", "不开放", "普通密码不向 AI 开放。"),
+        clients: dim("not_available", "不适用", "个人密码不做客户端授权。"),
+      }),
     },
     {
       id: "sample-prod",
@@ -140,6 +193,14 @@ export const previewData: {
       created_at: date,
       updated_at: date,
       status: "expired",
+      dimensions: status("e10-prod", {
+        credential: dim(
+          "expired",
+          "需重新登录",
+          "凭据有效期已过，需要重新验证。",
+          { error_code: "session_expired", recovery: "重新登录或更新凭据" },
+        ),
+      }),
     },
   ],
   clients: [

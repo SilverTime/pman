@@ -62,6 +62,7 @@ export type SiteSummary = {
   last_checked_at?: string | null;
   expires_at?: string | null;
   status: string;
+  dimensions?: ConnectionStatus;
 };
 export type SiteInput = {
   alias: string;
@@ -179,6 +180,28 @@ export type ConnectionCheck = {
   account?: string;
   tenant?: string;
 };
+export type DimensionStatus = {
+  state: string;
+  label: string;
+  detail: string;
+  checked_at?: string;
+  error_code?: string;
+  recovery?: string;
+  evidence?: string;
+};
+export type ConnectionStatus = {
+  alias: string;
+  credential: DimensionStatus;
+  identity: DimensionStatus;
+  api: DimensionStatus;
+  web: DimensionStatus;
+  clients: DimensionStatus;
+  service?: {
+    management_locked: boolean;
+    service_paused: boolean;
+    service_running: boolean;
+  };
+};
 
 export const defaultSettings: Settings = {
   autostart: true,
@@ -273,4 +296,68 @@ export function errorText(error: unknown): string {
   if (/management.*locked|vault is locked/i.test(message))
     return "管理界面已锁定，请重新验证身份。";
   return message;
+}
+
+/**
+ * Stable error codes with their recovery actions (see STATE-CONTRACT.md).
+ * Text never contains credential material; unknown codes stay generic.
+ */
+const errorCodeCatalog: Record<string, { text: string; action: string }> = {
+  not_paired: { text: "客户端未配对", action: "在 pman 桌面配对此 AI 客户端。" },
+  harness_invalid: {
+    text: "客户端已失效",
+    action: "重新配对客户端后再授权。",
+  },
+  policy_denied: { text: "授权不足", action: "调整此客户端的授权范围。" },
+  explicit_deny: {
+    text: "已被明确拒绝",
+    action: "如需允许，先在 AI 工具中移除对应的拒绝规则。",
+  },
+  pending_approval: {
+    text: "等待审批",
+    action: "在 pman 桌面批准该请求后重试。",
+  },
+  session_expired: { text: "会话已过期", action: "重新登录或更新凭据。" },
+  network_error: { text: "网络异常", action: "检查网络连接后重试。" },
+  timeout: { text: "请求超时", action: "稍后重新检查。" },
+  rate_limited: { text: "请求被限流", action: "等待限流窗口结束后重试。" },
+  service_paused: { text: "AI 服务已暂停", action: "在 pman 桌面恢复 AI 服务。" },
+  vault_locked: { text: "服务未解锁", action: "在 pman 桌面恢复 AI 服务。" },
+  management_locked: {
+    text: "管理界面已锁定",
+    action: "解锁管理界面；这不影响已授权的 AI 调用。",
+  },
+  account_context_changed: {
+    text: "账号上下文已变化",
+    action: "重新确认账号与地址后重新检查或授权。",
+  },
+  unauthorized: { text: "身份验证失败(401)", action: "更新凭据或重新登录。" },
+  forbidden: {
+    text: "权限不足(403)",
+    action: "确认服务端账号权限；403 不一定是凭据过期。",
+  },
+  invalid_response: { text: "响应无法识别", action: "重新检查；若持续出现请确认服务地址。" },
+  response_blocked: {
+    text: "响应疑似包含凭据，已阻止",
+    action: "重新登录后再试。",
+  },
+  origin_mismatch: {
+    text: "连接环境与调用方要求不一致",
+    action: "确认调用的连接与目标环境。",
+  },
+  unknown_site: { text: "连接不存在", action: "刷新连接列表。" },
+  site_inactive: { text: "连接已停用", action: "在连接管理中恢复连接。" },
+  invalid_request: { text: "请求无效", action: "检查请求参数后重试。" },
+  request_failed: { text: "请求失败", action: "重新尝试；结果未知时不要盲目重试写操作。" },
+  account_mismatch: {
+    text: "远端账号与连接不一致",
+    action: "重新登录并确认账号。",
+  },
+};
+export function errorCodeInfo(code?: string | null): {
+  text: string;
+  action: string;
+} {
+  if (code && errorCodeCatalog[code]) return errorCodeCatalog[code];
+  return { text: "状态未知", action: "重新检查连接。" };
 }

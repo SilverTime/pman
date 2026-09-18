@@ -596,6 +596,60 @@
 .authorized-client > .text-button {
   margin-left: var(--s3);
 }
+.status-rows {
+  display: flex;
+  flex-direction: column;
+}
+.status-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s3) 0;
+  border-top: var(--line-width) solid var(--line-subtle);
+}
+.status-row:first-child {
+  border-top: none;
+}
+.status-name {
+  flex: 0 0 5.5em;
+  font-size: var(--text-sm);
+  color: var(--muted);
+  padding-top: 2px;
+}
+.status-row .badge {
+  flex: 0 0 auto;
+}
+.status-text {
+  flex: 1;
+  min-width: 0;
+}
+.status-text p {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--body-leading);
+}
+.status-text small {
+  display: block;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  margin-top: var(--s1);
+}
+.status-recovery {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  max-width: 16em;
+  text-align: right;
+}
+@media (max-width: 1180px) {
+  .status-row {
+    flex-wrap: wrap;
+  }
+  .status-recovery {
+    text-align: left;
+    max-width: none;
+  }
+}
 .privacy-note {
   display: flex;
   align-items: flex-start;

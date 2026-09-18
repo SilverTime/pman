@@ -161,3 +161,47 @@ fn stale_management_verification_and_revoked_identity_are_rejected() {
         .unwrap();
     assert_eq!(status(&shared)["error_code"], "harness_invalid");
 }
+
+#[test]
+fn management_lock_neither_changes_connection_evidence_nor_stops_api() {
+    use pman_core::status::{CheckEvidence, DIMENSION_IDENTITY};
+    let (_dir, shared) = fixture("https://example.test");
+    {
+        let mut core = shared.core.lock().unwrap();
+        core.vault
+            .record_check_evidence(
+                "fixture",
+                DIMENSION_IDENTITY,
+                CheckEvidence {
+                    state: "verified".into(),
+                    checked_at: "2026-09-19T10:00:00".into(),
+                    ..CheckEvidence::default()
+                },
+            )
+            .unwrap();
+    }
+    let before = shared
+        .core
+        .lock()
+        .unwrap()
+        .vault
+        .connection_status("fixture")
+        .unwrap();
+    assert_eq!(before.identity.state, "verified");
+    assert_eq!(before.api.state, "unchecked");
+
+    // Locking the management UI is a separate dimension from API capability.
+    shared.lock_interface();
+    assert!(shared.require_management().is_err());
+    let after = shared
+        .core
+        .lock()
+        .unwrap()
+        .vault
+        .connection_status("fixture")
+        .unwrap();
+    assert_eq!(before, after, "管理锁定不得改写连接状态证据");
+    // The API dimension stays available and real calls keep working.
+    assert_eq!(after.api.state, "unchecked");
+    assert_eq!(status(&shared)["service_running"], true);
+}

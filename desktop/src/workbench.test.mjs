@@ -128,6 +128,87 @@ test("saved credentials and paired clients are not presented as verified usage",
   assert.equal(logic.clientActive({ paired: true }), true);
 });
 
+test("status dimensions render separate evidence and never a merged connected", async () => {
+  const loaded = await load("./ConnectionLibrary.tsx");
+  const html = renderToStaticMarkup(
+    React.createElement(loaded.exports.StatusPanel, {
+      dimensions: {
+        alias: "api",
+        credential: {
+          state: "saved",
+          label: "已保存",
+          detail: "凭据已加密保存在本机保险库。",
+        },
+        identity: {
+          state: "unauthorized",
+          label: "身份验证失败(401)",
+          detail: "远端拒绝此凭据。",
+          error_code: "session_expired",
+          recovery: "重新登录或更新凭据",
+        },
+        api: {
+          state: "unchecked",
+          label: "尚未检查",
+          detail: "已授权，但还没有通过本机代理验证或真实调用记录。",
+        },
+        web: {
+          state: "not_available",
+          label: "尚未接入",
+          detail: "AI 网页操作通道尚未提供。",
+        },
+        clients: {
+          state: "granted",
+          label: "1 个客户端已授权",
+          detail: "授权持续到撤销；拒绝规则继续生效。",
+        },
+      },
+    }),
+  );
+  assert.match(html, /状态明细/);
+  assert.match(html, /已保存/);
+  assert.match(html, /身份验证失败\(401\)/);
+  assert.match(html, /重新登录或更新凭据/);
+  assert.match(html, /尚未检查/);
+  assert.match(html, /尚未接入/);
+  assert.doesNotMatch(html, /<i><\/i>已连接/);
+});
+
+test("missing status evidence always shows 尚未检查 instead of assumed health", async () => {
+  const loaded = await load("./ConnectionLibrary.tsx");
+  const empty = renderToStaticMarkup(
+    React.createElement(loaded.exports.StatusPanel, {}),
+  );
+  assert.match(empty, /尚未检查/);
+  assert.doesNotMatch(empty, /已验证|检查通过|badge success/);
+});
+
+test("invalid or revoked client grants stay visibly broken until repaired", async () => {
+  const { exports: logic } = await load("./connections.ts");
+  const broken = logic.dimensionSummary({
+    state: "client_invalid",
+    label: "客户端已失效",
+    detail: "已授权的客户端都已撤销或过期。",
+    recovery: "重新配对客户端后再次授权",
+  });
+  assert.equal(broken.tone, "warning");
+  assert.equal(broken.recovery, "重新配对客户端后再次授权");
+  assert.equal(logic.dimensionTone("stale"), "warning");
+  assert.equal(logic.dimensionTone("network_error"), "danger");
+});
+
+test("error codes map to stable recovery actions without credential text", async () => {
+  const loaded = await load("./api.ts");
+  assert.equal(
+    loaded.exports.errorCodeInfo("session_expired").action,
+    "重新登录或更新凭据。",
+  );
+  assert.equal(
+    loaded.exports.errorCodeInfo("management_locked").text,
+    "管理界面已锁定",
+  );
+  assert.equal(loaded.exports.errorCodeInfo("mystery_code").text, "状态未知");
+});
+
 test("connection summaries retain legacy default-allow policies but omit revoked policies", async () => {
   const { exports: logic } = await load("./connections.ts");
   const site = { alias: "api" };

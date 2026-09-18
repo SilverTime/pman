@@ -9,6 +9,7 @@ mod http_proxy;
 pub mod ipc;
 mod policy;
 mod request_lifecycle;
+pub mod status;
 mod vault;
 mod workspace;
 
@@ -28,6 +29,7 @@ pub use vault::{
     SiteSummary, Vault, VaultError,
 };
 pub use workspace::{ClientSummary, ConnectionDetails, ScenarioMatch, ScenarioRoute};
+pub use status::{CheckEvidence, ConnectionStatus, DimensionStatus};
 
 /// Validate a request at the core boundary before any credential lookup.
 pub fn validate_http_request(request: HttpRequest) -> Result<HttpRequest, ProtocolError> {

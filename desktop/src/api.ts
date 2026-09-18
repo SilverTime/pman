@@ -42,6 +42,17 @@ export type SiteDetails = {
   scenarios?: ScenarioRoute[];
   provider?: string | null;
   check_path?: string | null;
+  oauth_client_id?: string | null;
+  oauth_scope?: string | null;
+};
+export type OAuthStart = {
+  session_id: string;
+  provider: string;
+  kind: "browser" | "device";
+  url: string;
+  user_code?: string;
+  expires_at: string;
+  origin: string;
 };
 export type ScenarioRoute = {
   intent: string;

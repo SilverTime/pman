@@ -33,6 +33,47 @@ pub struct PendingE10 {
     pub generation: u64,
     pub auth_epoch: u64,
 }
+/// Provider-agnostic OAuth flow handle. Secrets never leave the flow.
+pub enum PendingOAuthFlow {
+    GitLab(pman_core::oauth::GitLabOAuthFlow),
+    GitHub(pman_core::oauth::GitHubDeviceFlow),
+}
+impl PendingOAuthFlow {
+    pub fn info(&self) -> pman_core::oauth::OAuthStart {
+        match self {
+            Self::GitLab(flow) => flow.info(),
+            Self::GitHub(flow) => flow.info(),
+        }
+    }
+    pub fn cancellation(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        match self {
+            Self::GitLab(flow) => flow.cancellation(),
+            Self::GitHub(flow) => flow.cancellation(),
+        }
+    }
+    pub fn cancel(&self) {
+        match self {
+            Self::GitLab(flow) => flow.cancel(),
+            Self::GitHub(flow) => flow.cancel(),
+        }
+    }
+    pub fn complete(
+        self,
+        timeout: Duration,
+    ) -> Result<pman_core::oauth::OAuthResult, pman_core::oauth::OAuthError> {
+        match self {
+            Self::GitLab(flow) => flow.complete(timeout),
+            Self::GitHub(flow) => flow.complete(timeout),
+        }
+    }
+}
+pub struct PendingOAuth {
+    pub alias: String,
+    pub provider: String,
+    pub flow: Option<PendingOAuthFlow>,
+    pub generation: u64,
+    pub auth_epoch: u64,
+}
 #[derive(Clone)]
 pub struct Shared {
     pub core: Arc<Mutex<CoreState>>,
@@ -41,6 +82,9 @@ pub struct Shared {
     pub browser_logins: Arc<Mutex<HashMap<String, LoginBinding>>>,
     pub e10_flows: Arc<Mutex<HashMap<String, PendingE10>>>,
     pub e10_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    pub oauth_flows: Arc<Mutex<HashMap<String, PendingOAuth>>>,
+    /// Single-flight guard per alias while a token refresh is running.
+    pub oauth_refreshing: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 impl Shared {
     pub fn open() -> Result<Self, String> {
@@ -59,6 +103,8 @@ impl Shared {
             browser_logins: Default::default(),
             e10_flows: Default::default(),
             e10_cancellations: Default::default(),
+            oauth_flows: Default::default(),
+            oauth_refreshing: Default::default(),
         };
         let should_resume = state.management.lock().unwrap().should_resume();
         if should_resume {
@@ -107,6 +153,18 @@ impl Shared {
         }
         if let Ok(mut logins) = self.browser_logins.lock() {
             logins.clear();
+        }
+        if let Ok(mut flows) = self.oauth_flows.lock() {
+            for pending in flows.values() {
+                pending.flow.as_ref().map(|flow| flow.cancel());
+            }
+            flows.clear();
+        }
+        if let Ok(mut refreshing) = self.oauth_refreshing.lock() {
+            for flag in refreshing.values() {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            refreshing.clear();
         }
     }
     pub fn save_resume_material(&self) -> Result<(), String> {

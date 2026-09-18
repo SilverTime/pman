@@ -650,6 +650,26 @@
     max-width: none;
   }
 }
+.check-settings {
+  margin-top: var(--s3);
+  border-top: var(--line-width) solid var(--line-subtle);
+  padding-top: var(--s3);
+}
+.check-settings > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  user-select: none;
+}
+.check-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--s3);
+  margin: var(--s3) 0;
+}
+.check-settings .panel-hint {
+  margin: 0 0 var(--s3);
+}
 .privacy-note {
   display: flex;
   align-items: flex-start;

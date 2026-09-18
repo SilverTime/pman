@@ -12,6 +12,7 @@ import {
   ConnectionCheck,
   ConnectionStatus,
   HarnessSummary,
+  OAuthStart,
   SiteInput,
   SiteSummary,
   call,
@@ -28,6 +29,7 @@ import {
   connectionAbility,
   connectionGrants,
   connectionHost,
+  connectionProvider,
   dimensionSummary,
   expired,
   needsAttention,
@@ -97,6 +99,7 @@ export function ConnectionLibrary({
   const [managing, setManaging] = useState<SiteSummary | null>(null);
   const [rotating, setRotating] = useState<SiteSummary | null>(null);
   const [deleting, setDeleting] = useState<SiteSummary | null>(null);
+  const [oauthFlow, setOauthFlow] = useState<SiteSummary | null>(null);
   const [tab, setTab] = useState("overview");
   const search = useRef<HTMLInputElement>(null);
   const content = useRef<HTMLElement>(null);
@@ -467,7 +470,32 @@ export function ConnectionLibrary({
                         检查连接
                       </button>
                     )}
+                    {!["login", "e10", "cookie_jar", "password"].includes(
+                      current.auth_type,
+                    ) &&
+                      connectionProvider(current) &&
+                      siteDetails(current).oauth_client_id && (
+                        <button
+                          className="button small"
+                          disabled={action.busy}
+                          onClick={() => setOauthFlow(current)}
+                        >
+                          <Icon name="globe" size={15} />
+                          OAuth 登录
+                        </button>
+                      )}
                   </div>
+                  {!["login", "e10", "cookie_jar", "password"].includes(
+                    current.auth_type,
+                  ) &&
+                    connectionProvider(current) &&
+                    !siteDetails(current).oauth_client_id && (
+                      <p className="panel-hint">
+                        OAuth 免密登录（无需 client
+                        secret）可用：在“检查与 OAuth 设置”中保存应用 client_id
+                        后，这里会出现登录入口。也可以继续使用 Token。
+                      </p>
+                    )}
                 </section>
                 <section className="library-panel">
                   <header>
@@ -803,6 +831,13 @@ export function ConnectionLibrary({
           }}
         />
       )}
+      {oauthFlow && (
+        <OAuthDialog
+          site={oauthFlow}
+          onClose={() => setOauthFlow(null)}
+          onRefresh={onRefresh}
+        />
+      )}
       {managing && (
         <Modal title="凭据与高级管理" onClose={() => setManaging(null)}>
           <CredentialDetail
@@ -897,6 +932,10 @@ export function StatusPanel({
   const canCheck = site.auth_type !== "password" && site.auth_type !== "e10";
   const [provider, setProvider] = useState(details.provider || "auto");
   const [checkPath, setCheckPath] = useState(details.check_path || "");
+  const [oauthClientId, setOauthClientId] = useState(
+    details.oauth_client_id || "",
+  );
+  const [oauthScope, setOauthScope] = useState(details.oauth_scope || "");
   return (
     <section className="library-panel status-panel" aria-label="状态明细">
       <header>
@@ -942,7 +981,7 @@ export function StatusPanel({
       </div>
       {canCheck && (
         <details className="check-settings">
-          <summary>检查设置</summary>
+          <summary>检查与 OAuth 设置</summary>
           <div className="check-settings-grid">
             <label>
               检查方式
@@ -965,7 +1004,29 @@ export function StatusPanel({
                 onChange={(event) => setCheckPath(event.target.value)}
               />
             </label>
+            <label>
+              OAuth 应用 client_id
+              <input
+                value={oauthClientId}
+                placeholder="在 GitHub / GitLab 注册的公开应用 ID"
+                spellCheck={false}
+                onChange={(event) => setOauthClientId(event.target.value)}
+              />
+            </label>
+            <label>
+              OAuth scope
+              <input
+                value={oauthScope}
+                placeholder="留空使用最小只读范围"
+                spellCheck={false}
+                onChange={(event) => setOauthScope(event.target.value)}
+              />
+            </label>
           </div>
+          <p className="panel-hint">
+            OAuth 只支持无需 client secret 的官方流程（GitLab PKCE / GitHub
+            设备码）；令牌只保存在本机保险库。
+          </p>
           <button
             className="button small"
             disabled={busy}
@@ -973,14 +1034,140 @@ export function StatusPanel({
               void onUpdateDetails({
                 provider: provider === "auto" ? null : provider,
                 check_path: checkPath.trim() || null,
+                oauth_client_id: oauthClientId.trim() || null,
+                oauth_scope: oauthScope.trim() || null,
               })
             }
           >
-            保存检查设置
+            保存设置
           </button>
         </details>
       )}
     </section>
+  );
+}
+
+/**
+ * OAuth login lifecycle: begin -> (browser or device code) -> complete.
+ * The dialog only sees the session id, user code and redacted account;
+ * token exchange happens entirely on the native side.
+ */
+export function OAuthDialog({
+  site,
+  onClose,
+  onRefresh,
+}: {
+  site: SiteSummary;
+  onClose: () => void;
+  onRefresh: () => Promise<void>;
+}) {
+  const [info, setInfo] = useState<OAuthStart | null>(null);
+  const [stage, setStage] = useState<"starting" | "waiting" | "done" | "error">(
+    "starting",
+  );
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const start = await call<OAuthStart>("oauth_begin", {
+          alias: site.alias,
+        });
+        if (cancelled) {
+          void call("oauth_cancel", { sessionId: start.session_id }).catch(
+            () => undefined,
+          );
+          return;
+        }
+        setInfo(start);
+        setStage("waiting");
+        await call("oauth_complete", {
+          sessionId: start.session_id,
+          alias: site.alias,
+        });
+        if (cancelled) return;
+        setStage("done");
+        await onRefresh();
+      } catch (err) {
+        if (!cancelled) {
+          setError(errorText(err));
+          setStage("error");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [site.alias]);
+  async function cancelLogin() {
+    if (info) {
+      await call("oauth_cancel", { sessionId: info.session_id }).catch(
+        () => undefined,
+      );
+    }
+    onClose();
+  }
+  return (
+    <Modal
+      title={`使用 OAuth 登录 ${site.name || site.alias}`}
+      onClose={stage === "waiting" ? () => void cancelLogin() : onClose}
+    >
+      {stage === "starting" && (
+        <div className="loading-state" role="status">
+          正在启动授权流程…
+        </div>
+      )}
+      {stage === "waiting" && info && (
+        <div className="stack-form">
+          {info.kind === "device" && info.user_code && (
+            <div className="info-box">
+              <Icon name="terminal" />
+              <p>
+                在打开的页面中输入设备码 <code>{info.user_code}</code>
+              </p>
+            </div>
+          )}
+          <p className="muted small-text">
+            浏览器窗口已打开。完成授权后这里会自动更新；请不要在任何页面输入
+            pman 主密码。
+          </p>
+          <div className="loading-state" role="status">
+            等待提供方确认授权…
+          </div>
+        </div>
+      )}
+      {stage === "done" && (
+        <div className="consent-result" role="status">
+          <div className="result-heading">
+            <Icon name="check" size={24} />
+            <div>
+              <h2>登录成功</h2>
+              <p>账号已接入并验证。返回后仍需选择 AI 并完成授权。</p>
+            </div>
+          </div>
+        </div>
+      )}
+      {stage === "error" && (
+        <div className="stack-form">
+          <Notice error={error} />
+          <p className="muted small-text">
+            OAuth 未配置或被拒绝时，请使用 Token
+            接入；失败的登录不会改动已保存的凭据或授权。
+          </p>
+        </div>
+      )}
+      <div className="modal-actions">
+        {stage === "waiting" ? (
+          <button className="button" onClick={() => void cancelLogin()}>
+            取消登录
+          </button>
+        ) : (
+          <button className="button primary" onClick={onClose}>
+            {stage === "done" ? "完成" : "关闭"}
+          </button>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -1175,17 +1362,18 @@ function ConnectionWizard({
           </p>
         </>
       ) : !saved ? (
-        <EntryDialog
-          key={template.id}
-          embedded
-          initial={{
-            name: template.title,
-            alias: uniqueAlias(template.id),
-            site_url: template.url,
-            auth_type: template.type,
-          }}
-          onClose={() => setTemplate(null)}
-          onSaved={async (input) => {
+        <>
+          <EntryDialog
+            key={template.id}
+            embedded
+            initial={{
+              name: template.title,
+              alias: uniqueAlias(template.id),
+              site_url: template.url,
+              auth_type: template.type,
+            }}
+            onClose={() => setTemplate(null)}
+            onSaved={async (input) => {
             // Never retain user-entered secrets in the flow's metadata state.
             const { secret: _secret, ...metadata } = input;
             const summary: SiteSummary = {
@@ -1203,6 +1391,15 @@ function ConnectionWizard({
             if (input.auth_type === "password") onFinished(input.alias);
           }}
         />
+          {["github", "gitlab"].includes(template.id) && (
+            <p className="panel-hint">
+              也可以使用免密 OAuth 授权（GitHub 设备码 / GitLab
+              浏览器授权）：需要在 {template.title}
+              注册应用并保存 client_id。添加连接后，在连接详情的“检查与 OAuth
+              设置”中配置；未配置时继续使用 Token，不存在假的一键登录。
+            </p>
+          )}
+        </>
       ) : needsLogin && !loginComplete ? (
         <section className="library-panel login-resume">
           <ServiceMark name={saved.name || saved.alias} />

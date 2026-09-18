@@ -86,6 +86,20 @@ export function connectionHost(site: SiteSummary) {
     return "本机保存";
   }
 }
+/** Mirrors the native provider detection in check.rs / oauth_login.rs. */
+export function connectionProvider(site: SiteSummary): "github" | "gitlab" | null {
+  const details = siteDetails(site);
+  if (details.provider === "github" || details.provider === "gitlab")
+    return details.provider;
+  try {
+    const host = new URL(site.site_url).hostname.toLowerCase();
+    if (host === "api.github.com") return "github";
+    if (host === "gitlab.com" || host.endsWith(".gitlab.com")) return "gitlab";
+  } catch {
+    return null;
+  }
+  return null;
+}
 /** Badge tone for a status-dimension state. Unknown states stay cautious. */
 export function dimensionTone(state: string): string {
   switch (state) {

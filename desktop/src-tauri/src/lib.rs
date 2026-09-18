@@ -6,6 +6,7 @@ mod legacy_http;
 mod lifecycle;
 mod login;
 mod native_dialogs;
+mod oauth_login;
 mod platform;
 mod service;
 #[cfg(test)]
@@ -90,7 +91,12 @@ pub fn run() {
             login::e10_begin,
             login::e10_complete,
             login::e10_cancel,
-            login::e10_check
+            login::e10_check,
+            oauth_login::oauth_begin,
+            oauth_login::oauth_complete,
+            oauth_login::oauth_cancel,
+            oauth_login::oauth_status,
+            oauth_login::oauth_refresh
         ])
         .setup(move |app| {
             use tauri::{

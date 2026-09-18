@@ -207,7 +207,7 @@ test("personal passwords and E10 connections never offer the generic API check",
   assert.doesNotMatch(html("password"), /检查连接/);
   assert.doesNotMatch(html("e10"), /检查连接/);
   assert.match(html("api_token"), /检查连接/);
-  assert.match(html("api_token"), /检查设置/);
+  assert.match(html("api_token"), /检查与 OAuth 设置/);
 });
 
 test("invalid or revoked client grants stay visibly broken until repaired", async () => {
@@ -346,6 +346,37 @@ test("login state does not falsely label stored tokens as connected", async () =
       expires_at: "2000-01-01T00:00:00Z",
     }).text,
     "已过期",
+  );
+});
+
+test("oauth login presents real flows and never fakes success", async () => {
+  const source = await readFile(
+    new URL("./ConnectionLibrary.tsx", import.meta.url),
+    "utf8",
+  );
+  // The dialog waits for the provider; it does not claim success up front.
+  assert.match(source, /等待提供方确认授权/);
+  assert.match(source, /oauth_complete/);
+  assert.match(source, /oauth_cancel/);
+  // The wizard discloses that OAuth needs a registered client_id and the
+  // Token path stays available; unconfigured connections show no login button.
+  assert.match(source, /需要在 \{template\.title\}/);
+  assert.match(source, /oauth_client_id && \(/);
+  assert.match(source, /未配置时继续使用 Token/);
+  const { exports: logic } = await load("./connections.ts");
+  assert.equal(
+    logic.connectionProvider({
+      site_url: "https://api.github.com",
+      tags: [],
+    }),
+    "github",
+  );
+  assert.equal(
+    logic.connectionProvider({
+      site_url: "https://gitlab.example.test",
+      tags: [],
+    }),
+    null,
   );
 });
 

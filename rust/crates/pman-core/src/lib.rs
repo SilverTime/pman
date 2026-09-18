@@ -8,6 +8,7 @@ mod daemon;
 pub mod e10;
 mod http_proxy;
 pub mod ipc;
+pub mod oauth;
 mod policy;
 mod request_lifecycle;
 pub mod status;
@@ -32,6 +33,9 @@ pub use vault::{
 pub use workspace::{ClientSummary, ConnectionDetails, ScenarioMatch, ScenarioRoute};
 pub use status::{CheckEvidence, ConnectionStatus, DimensionStatus};
 pub use check::{execute_connection_check, CheckOutcome, ConnectionCheckPlan};
+pub use oauth::{
+    normalize_origin as normalize_oauth_origin, OAuthError, OAuthStart, OAuthTokens,
+};
 
 /// Validate a request at the core boundary before any credential lookup.
 pub fn validate_http_request(request: HttpRequest) -> Result<HttpRequest, ProtocolError> {

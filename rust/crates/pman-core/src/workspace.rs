@@ -48,6 +48,11 @@ pub struct ConnectionDetails {
     /// Read-only check path for custom providers, e.g. `/api/v1/me`.
     /// Empty/absent means an unknown service without a check path.
     pub check_path: Option<String>,
+    /// User-registered OAuth application client id (public client, no
+    /// secret). Absent means OAuth is unconfigured and the Token path stays.
+    pub oauth_client_id: Option<String>,
+    /// OAuth scope request. Defaults to the provider's minimum read scope.
+    pub oauth_scope: Option<String>,
     pub extra: Value,
 }
 

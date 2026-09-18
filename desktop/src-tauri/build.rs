@@ -1,3 +1,12 @@
 fn main() {
-    tauri_build::build()
+    // We embed one manifest for every target (bin, lib, tests) ourselves so
+    // the lib test harness also resolves comctl32 v6 imports (TaskDialog) —
+    // tauri-build's own manifest is only linked into bin targets.
+    let attrs = tauri_build::Attributes::new()
+        .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+    tauri_build::try_build(attrs).expect("failed to run tauri-build");
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("app.manifest");
+    println!("cargo:rerun-if-changed=app.manifest");
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
 }

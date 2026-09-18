@@ -257,6 +257,85 @@ fn same_display_name_with_different_uuids_keeps_identities_separate() {
 }
 
 #[test]
+fn browser_actions_fail_closed_before_touching_any_webview() {
+    let (_dir, shared) = fixture("https://example.test");
+    // The fixture connection has no web capability at all.
+    let result = shared.dispatch(IpcRequest {
+        client_id: "test-pair".into(),
+        proof: PROOF.into(),
+        operation: "browser_open".into(),
+        args: json!({"site": "fixture"}),
+    });
+    assert_eq!(result["error_code"], "web_disabled");
+    // An unknown session id for an unopened session never reaches a webview.
+    let result = shared.dispatch(IpcRequest {
+        client_id: "test-pair".into(),
+        proof: PROOF.into(),
+        operation: "browser_summary".into(),
+        args: json!({"session_id": "forged-session"}),
+    });
+    assert_eq!(result["error_code"], "web_session_unknown");
+    // Unsupported actions do not exist even with valid arguments.
+    let result = shared.dispatch(IpcRequest {
+        client_id: "test-pair".into(),
+        proof: PROOF.into(),
+        operation: "browser_eval".into(),
+        args: json!({"script": "return 1"}),
+    });
+    assert_eq!(result["error_code"], "web_action_unsupported");
+    // Enabling the connection is not enough: the client still has no web rule.
+    {
+        let mut core = shared.core.lock().unwrap();
+        core.vault
+            .update_details("fixture", json!({"web_enabled": true}))
+            .unwrap();
+    }
+    let result = shared.dispatch(IpcRequest {
+        client_id: "test-pair".into(),
+        proof: PROOF.into(),
+        operation: "browser_open".into(),
+        args: json!({"site": "fixture"}),
+    });
+    assert_eq!(result["error_code"], "web_not_authorized");
+    // Granting the client's harness its web rule authorizes the action path
+    // (the session window itself requires the desktop runtime, which the
+    // harness-less test environment honestly reports as unsupported).
+    {
+        let mut core = shared.core.lock().unwrap();
+        core.vault
+            .grant_web_clients(
+                "fixture",
+                &["test-pair".into()],
+                &["https://example.test".into()],
+            )
+            .unwrap();
+    }
+    let result = shared.dispatch(IpcRequest {
+        client_id: "test-pair".into(),
+        proof: PROOF.into(),
+        operation: "browser_open".into(),
+        args: json!({"site": "fixture"}),
+    });
+    // No app handle is registered in this test, so the web layer honestly
+    // reports that the web session window is unavailable (no fake success).
+    assert_eq!(result["error_code"], "web_action_unsupported");
+    // The session was never opened and no audit entry claims success.
+    assert_eq!(
+        shared
+            .core
+            .lock()
+            .unwrap()
+            .vault
+            .query_audit(Some("test-client"), 100)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.method.as_deref() == Some("WEB:open") && entry.status_code == Some(200))
+            .count(),
+        0
+    );
+}
+
+#[test]
 fn management_lock_neither_changes_connection_evidence_nor_stops_api() {
     use pman_core::status::{CheckEvidence, DIMENSION_IDENTITY};
     let (_dir, shared) = fixture("https://example.test");

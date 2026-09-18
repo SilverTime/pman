@@ -13,7 +13,7 @@ use std::{
     sync::{atomic::AtomicBool, Arc, Mutex},
     time::{Duration, Instant},
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 pub struct CoreState {
     pub vault: Vault,
@@ -85,6 +85,10 @@ pub struct Shared {
     pub oauth_flows: Arc<Mutex<HashMap<String, PendingOAuth>>>,
     /// Single-flight guard per alias while a token refresh is running.
     pub oauth_refreshing: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    /// Live AI web sessions (BROWSER-CONTRACT.md). Memory-only by design.
+    pub web_sessions: Arc<pman_core::WebSessions>,
+    /// Set once the Tauri app is running; web-session windows need it.
+    pub app_handle: Arc<std::sync::OnceLock<tauri::AppHandle>>,
 }
 impl Shared {
     pub fn open() -> Result<Self, String> {
@@ -105,6 +109,8 @@ impl Shared {
             e10_cancellations: Default::default(),
             oauth_flows: Default::default(),
             oauth_refreshing: Default::default(),
+            web_sessions: Arc::new(pman_core::WebSessions::new()),
+            app_handle: Arc::new(std::sync::OnceLock::new()),
         };
         let should_resume = state.management.lock().unwrap().should_resume();
         if should_resume {
@@ -165,6 +171,22 @@ impl Shared {
                 flag.store(true, std::sync::atomic::Ordering::SeqCst);
             }
             refreshing.clear();
+        }
+        // Explicit pause closes AI web sessions immediately.
+        self.close_web_session_windows(self.web_sessions.close_all());
+    }
+
+    /// Close and remove every live web session window.
+    pub fn close_web_session_windows(&self, closed: Vec<pman_core::WebSession>) {
+        if closed.is_empty() {
+            return;
+        }
+        if let Some(app) = self.app_handle.get() {
+            for session in closed {
+                if let Some(window) = app.get_webview_window(&session.window_label) {
+                    let _ = window.close();
+                }
+            }
         }
     }
     pub fn save_resume_material(&self) -> Result<(), String> {
@@ -248,6 +270,7 @@ impl Shared {
         )
     }
     pub fn start_background(&self, app: tauri::AppHandle) {
+        let _ = self.app_handle.set(app.clone());
         let transport = self.clone();
         let transport_app = app.clone();
         std::thread::spawn(move || {
@@ -427,6 +450,9 @@ impl Shared {
         self.dispatch_authenticated(&request, &harness)
     }
     pub fn dispatch_authenticated(&self, request: &IpcRequest, harness: &str) -> Value {
+        if request.operation.starts_with("browser_") {
+            return crate::browser_session::dispatch_web(self, request, harness);
+        }
         if matches!(request.operation.as_str(), "status" | "service_status") {
             let management = match self.management.lock() {
                 Ok(m) => m,

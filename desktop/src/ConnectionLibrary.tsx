@@ -31,6 +31,7 @@ import {
   connectionHost,
   connectionProvider,
   dimensionSummary,
+  dimensionTone,
   expired,
   needsAttention,
   statusDimensions,
@@ -100,6 +101,7 @@ export function ConnectionLibrary({
   const [rotating, setRotating] = useState<SiteSummary | null>(null);
   const [deleting, setDeleting] = useState<SiteSummary | null>(null);
   const [oauthFlow, setOauthFlow] = useState<SiteSummary | null>(null);
+  const [webSelected, setWebSelected] = useState<string[]>([]);
   const [tab, setTab] = useState("overview");
   const search = useRef<HTMLInputElement>(null);
   const content = useRef<HTMLElement>(null);
@@ -184,6 +186,21 @@ export function ConnectionLibrary({
     .slice(0, 3);
   const grants = current ? connectionGrants(current, harnesses) : [];
   const activeClients = clients.filter(clientActive);
+  const isPersonal = current ? current.auth_type === "password" : false;
+  const webEnabled = current ? Boolean(siteDetails(current).web_enabled) : false;
+  const webDim = current?.dimensions?.web;
+  const webOrigin = current ? connectionHost(current) : "";
+  const webGrantedClients = current
+    ? harnesses
+        .filter((harness) =>
+          (harness.policy.web || []).some((rule) => rule.site === current.alias),
+        )
+        .flatMap((harness) =>
+          activeClients
+            .filter((client) => client.harness === harness.name)
+            .map((client) => client.id),
+        )
+    : [];
 
   return (
     <div className="connection-library">
@@ -499,16 +516,123 @@ export function ConnectionLibrary({
                 </section>
                 <section className="library-panel">
                   <header>
-                    <h2>网页访问</h2>
-                    <Badge>尚未接入</Badge>
+                    <h2>网页操作</h2>
+                    <Badge tone={dimensionTone(webDim?.state || "not_available")}>
+                      {webDim?.label || "尚未开启"}
+                    </Badge>
                   </header>
                   <div className="browser-capability">
                     <Icon name="globe" size={28} />
-                    <h3>登录与网页操作分开验证</h3>
-                    <p>
-                      当前版本可保存网站登录会话供接口调用。AI
-                      操作网页的通道尚未提供。
+                    <h3>AI 网页操作（独立授权）</h3>
+                    <p>{webDim?.detail || "AI 网页操作未开启。"}</p>
+                    <p className="panel-hint">
+                      网页能力与接口授权互相独立；密码与验证码始终由你在隔离窗口输入，AI
+                      看不到。文件上传下载与支付/删除类操作不受支持。
                     </p>
+                    {!isPersonal && !webEnabled && (
+                      <button
+                        className="button small"
+                        disabled={action.busy}
+                        onClick={() =>
+                          void action.run(async () => {
+                            await updateDetails(current, { web_enabled: true });
+                            action.setMessage(
+                              "网页操作已开启。请选择允许的 AI 客户端完成授权。",
+                            );
+                          })
+                        }
+                      >
+                        开启网页操作
+                      </button>
+                    )}
+                    {!isPersonal && webEnabled && (
+                      <>
+                        <div className="client-selection">
+                          {activeClients.map((client) => (
+                            <label
+                              className={`client-choice${webSelected.includes(client.id) ? " selected" : ""}`}
+                              key={client.id}
+                            >
+                              <ServiceMark name={client.name} />
+                              <span>
+                                <strong>{client.name}</strong>
+                                <small>
+                                  {webGrantedClients.includes(client.id)
+                                    ? "已有网页授权 · 可重复保存"
+                                    : "已配对本机"}
+                                </small>
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={webSelected.includes(client.id)}
+                                disabled={action.busy}
+                                onChange={(event) =>
+                                  setWebSelected((ids) =>
+                                    event.target.checked
+                                      ? [...ids, client.id]
+                                      : ids.filter((id) => id !== client.id),
+                                  )
+                                }
+                              />
+                            </label>
+                          ))}
+                        </div>
+                        <div className="button-row">
+                          <button
+                            className="button small"
+                            disabled={action.busy || !webSelected.length}
+                            onClick={() =>
+                              void action.run(async () => {
+                                await call("grant_web_clients", {
+                                  site: current.alias,
+                                  clientIds: webSelected,
+                                  origins: [webOrigin],
+                                });
+                                action.setMessage(
+                                  "网页授权已保存。AI 客户端可通过 browser_* 动作操作该连接的页面。",
+                                );
+                                await onRefresh();
+                              })
+                            }
+                          >
+                            授权网页操作
+                          </button>
+                          <button
+                            className="button small"
+                            disabled={action.busy}
+                            onClick={() =>
+                              void action.run(async () => {
+                                const result = await call<{ closed: number }>(
+                                  "web_sessions_stop",
+                                  { alias: current.alias },
+                                );
+                                action.setMessage(
+                                  `已停止 ${result.closed} 个网页会话。`,
+                                );
+                              })
+                            }
+                          >
+                            停止网页会话
+                          </button>
+                          <button
+                            className="text-button danger-text"
+                            disabled={action.busy}
+                            onClick={() =>
+                              void action.run(async () => {
+                                await call("web_enable", {
+                                  alias: current.alias,
+                                  enabled: false,
+                                });
+                                setWebSelected([]);
+                                await onRefresh();
+                              })
+                            }
+                          >
+                            关闭网页操作
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </section>
               </div>

@@ -44,6 +44,7 @@ export type SiteDetails = {
   check_path?: string | null;
   oauth_client_id?: string | null;
   oauth_scope?: string | null;
+  web_enabled?: boolean;
 };
 export type OAuthStart = {
   session_id: string;
@@ -97,12 +98,18 @@ export type AllowRule = {
   capability?: string;
   constraints?: Record<string, Record<string, string[]>>;
 };
+export type WebRule = {
+  site: string;
+  actions?: string[];
+  origins?: string[];
+};
 export type HarnessSummary = {
   name: string;
   policy: {
     allow?: AllowRule[];
     deny?: AllowRule[];
     default_action?: string;
+    web?: WebRule[];
     [key: string]: unknown;
   };
   created_at: string;

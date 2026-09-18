@@ -410,13 +410,27 @@ fn compute_connection_status(
     };
 
     // Dimension 4: browser capability. Gated behind its own contract; the
-    // API authorization never migrates into it.
-    let web = DimensionStatus::new(
-        STATE_NOT_AVAILABLE,
-        "尚未接入",
-        "AI 网页操作通道尚未提供；已保存的登录会话仅供接口调用。",
-    )
-    .with_evidence("policy");
+    // API authorization never migrates into it. Real end-to-end verification
+    // is a separate manual acceptance step, so an enabled connection still
+    // reports "尚未检查" instead of "可用".
+    let web = if personal {
+        DimensionStatus::new(STATE_NOT_AVAILABLE, "不适用", "个人密码没有网页操作能力。")
+            .with_evidence("policy")
+    } else if !details.web_enabled {
+        DimensionStatus::new(
+            STATE_NOT_AVAILABLE,
+            "尚未开启",
+            "AI 网页操作未开启；已保存的登录会话仅供接口调用。",
+        )
+        .with_evidence("policy")
+    } else {
+        DimensionStatus::new(
+            STATE_UNCHECKED,
+            "已开启 · 尚未检查",
+            "网页操作能力已开启；请在真实页面验证后确认可用。",
+        )
+        .with_evidence("policy")
+    };
 
     // Dimension 5: client authorization state for this connection.
     let clients_status = if personal {

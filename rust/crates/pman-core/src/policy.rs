@@ -29,6 +29,24 @@ pub struct Policy {
     pub approval: ApprovalPolicy,
     #[serde(default)]
     pub redact: RedactionPolicy,
+    /// Independent browser-capability grants (BROWSER-CONTRACT.md). Old
+    /// policies without this field default to empty: API authorization never
+    /// migrates into web capability.
+    #[serde(default)]
+    pub web: Vec<WebRule>,
+}
+
+/// Per-client, per-connection browser capability. Absent = no web access.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebRule {
+    pub site: String,
+    /// Allowed actions: open, summary, click, fill, wait, close.
+    #[serde(default)]
+    pub actions: Vec<String>,
+    /// Allowed page origins; an action outside them is denied.
+    #[serde(default)]
+    pub origins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -129,6 +147,24 @@ impl Policy {
     pub fn from_json(value: &serde_json::Value) -> Result<Self, PolicyError> {
         let policy: Self = serde_json::from_value(value.clone())
             .map_err(|error| PolicyError::Invalid(error.to_string()))?;
+        for rule in policy.web.iter() {
+            if rule.site.is_empty()
+                || rule.site.chars().count() > 128
+                || rule.actions.is_empty()
+                || rule
+                    .actions
+                    .iter()
+                    .any(|a| !crate::browser::WEB_ACTIONS.contains(&a.as_str()))
+                || rule.origins.is_empty()
+                || rule.origins.iter().any(|o| {
+                    o.is_empty()
+                        || o.len() > 256
+                        || crate::browser::normalize_web_origin(o).is_err()
+                })
+            {
+                return Err(PolicyError::Invalid("invalid web rule".into()));
+            }
+        }
         for rule in policy.allow.iter().chain(policy.deny.iter()) {
             if rule.capability.as_deref().is_some_and(|value| {
                 value.is_empty()

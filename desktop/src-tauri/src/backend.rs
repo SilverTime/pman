@@ -354,7 +354,10 @@ pub fn site_remove(
         .map_err(|_| "服务状态不可用")?
         .vault
         .remove_site(&alias)
-        .map_err(safe_error)
+        .map_err(safe_error)?;
+    // A deleted connection cannot keep web sessions.
+    state.close_web_session_windows(state.web_sessions.close_for_site(&alias));
+    Ok(())
 }
 #[tauri::command]
 pub fn site_reveal(
@@ -808,13 +811,22 @@ pub fn client_revoke(
     state: State<Shared>,
 ) -> Result<(), String> {
     let _guard = admin(&window, &state)?;
-    state
-        .core
-        .lock()
-        .map_err(|_| "服务状态不可用")?
-        .vault
-        .revoke_client(&id)
-        .map_err(safe_error)?;
+    let harness = {
+        let mut core = state.core.lock().map_err(|_| "服务状态不可用")?;
+        let harness = core
+            .vault
+            .list_clients()
+            .map_err(safe_error)?
+            .into_iter()
+            .find(|client| client.id == id)
+            .map(|client| client.harness);
+        core.vault.revoke_client(&id).map_err(safe_error)?;
+        harness
+    };
+    // Revoked clients lose their web sessions immediately.
+    if let Some(harness) = harness {
+        state.close_web_session_windows(state.web_sessions.close_for_harness(&harness));
+    }
     ipc::remove_pairing(&id).map_err(|_| "授权已撤销，本机旧配对文件未能移除".into())
 }
 #[tauri::command]
@@ -848,6 +860,55 @@ pub fn client_config_restore(
     let _guard = admin(&window, &state)?;
     client_config::restore(&client(&state, &id)?, &state.home)
 }
+/// Connection-level web-capability switch (BROWSER-CONTRACT.md). Enabling
+/// never grants a client; per-client web rules are a separate step.
+#[tauri::command]
+pub fn web_enable(
+    alias: String,
+    enabled: bool,
+    window: WebviewWindow,
+    state: State<Shared>,
+) -> Result<(), String> {
+    let _guard = admin(&window, &state)?;
+    let mut core = state.core.lock().map_err(|_| "服务状态不可用")?;
+    core.vault.set_web_enabled(&alias, enabled).map_err(safe_error)?;
+    if !enabled {
+        drop(core);
+        state.close_web_session_windows(state.web_sessions.close_for_site(&alias));
+    }
+    Ok(())
+}
+
+/// Per-client browser authorization with explicit origins.
+#[tauri::command]
+pub fn grant_web_clients(
+    site: String,
+    client_ids: Vec<String>,
+    origins: Vec<String>,
+    window: WebviewWindow,
+    state: State<Shared>,
+) -> Result<(), String> {
+    let _guard = admin(&window, &state)?;
+    let mut core = state.core.lock().map_err(|_| "服务状态不可用")?;
+    core.vault
+        .grant_web_clients(&site, &client_ids, &origins)
+        .map_err(safe_error)
+}
+
+/// Stop all web sessions of a connection (human control entry point).
+#[tauri::command]
+pub fn web_sessions_stop(
+    alias: String,
+    window: WebviewWindow,
+    state: State<Shared>,
+) -> Result<Value, String> {
+    let _guard = admin(&window, &state)?;
+    let closed = state.web_sessions.close_for_site(&alias);
+    let count = closed.len();
+    state.close_web_session_windows(closed);
+    Ok(json!({"closed": count}))
+}
+
 /// Identity/capability handshake through the real pairing channel (DPAPI
 /// capability file + named pipe). It proves local pairing and proxy health
 /// and lists granted connections; it is never a claim that the AI tool has

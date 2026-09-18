@@ -1,4 +1,5 @@
 mod backend;
+mod browser_session;
 mod client_config;
 #[cfg(test)]
 mod installation_tests;
@@ -97,7 +98,10 @@ pub fn run() {
             oauth_login::oauth_complete,
             oauth_login::oauth_cancel,
             oauth_login::oauth_status,
-            oauth_login::oauth_refresh
+            oauth_login::oauth_refresh,
+            backend::web_enable,
+            backend::grant_web_clients,
+            backend::web_sessions_stop
         ])
         .setup(move |app| {
             use tauri::{

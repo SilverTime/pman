@@ -53,6 +53,9 @@ pub struct ConnectionDetails {
     pub oauth_client_id: Option<String>,
     /// OAuth scope request. Defaults to the provider's minimum read scope.
     pub oauth_scope: Option<String>,
+    /// Independent browser capability (BROWSER-CONTRACT.md). Default false:
+    /// existing API authorization never grants web access.
+    pub web_enabled: bool,
     pub extra: Value,
 }
 

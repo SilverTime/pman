@@ -3,6 +3,7 @@
 mod assistance;
 mod backup;
 mod broker;
+pub mod browser;
 mod check;
 mod daemon;
 pub mod e10;
@@ -33,6 +34,7 @@ pub use vault::{
 pub use workspace::{ClientSummary, ConnectionDetails, ScenarioMatch, ScenarioRoute};
 pub use status::{CheckEvidence, ConnectionStatus, DimensionStatus};
 pub use check::{execute_connection_check, CheckOutcome, ConnectionCheckPlan};
+pub use browser::{WebSession, WebSessions};
 pub use oauth::{
     normalize_origin as normalize_oauth_origin, OAuthError, OAuthStart, OAuthTokens,
 };

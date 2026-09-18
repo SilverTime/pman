@@ -27,6 +27,7 @@ toml = "0.9"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 
 [target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
 windows = { version = "0.61", features = ["Security_Credentials_UI", "Win32_System_WinRT", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_SystemInformation", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_Threading", "UI_Notifications", "Data_Xml_Dom", "Win32_UI_Controls_Dialogs", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem", "Win32_Storage_EnhancedStorage"] }
 windows-future = "0.2"
 

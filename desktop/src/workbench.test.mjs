@@ -349,6 +349,21 @@ test("login state does not falsely label stored tokens as connected", async () =
   );
 });
 
+test("recovery affordances: batch consent, named failures and delete impact", async () => {
+  const source = await readFile(
+    new URL("./ConnectionLibrary.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /清除选择/);
+  assert.match(source, /全选/);
+  assert.match(source, /以下客户端已失效，本次授权未保存/);
+  assert.match(source, /正在进行的网页会话被关闭/);
+  assert.match(source, /授权规则被撤销/);
+  // The refresh retry affordance lives on the workbench level.
+  const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
+  assert.match(app, /重试刷新/);
+});
+
 test("oauth login presents real flows and never fakes success", async () => {
   const source = await readFile(
     new URL("./ConnectionLibrary.tsx", import.meta.url),

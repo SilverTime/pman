@@ -627,6 +627,16 @@ function Workbench({
         >
           <div className="global-notices">
             <Notice error={statusError || loadError || action.error} />
+            {(statusError || loadError) && (
+              <button
+                className="button small"
+                disabled={loading}
+                onClick={() => void refresh()}
+              >
+                <Icon name="refresh" size={15} />
+                重试刷新
+              </button>
+            )}
           </div>
           <div hidden={route !== "credentials"} className="library-route">
             <ConnectionLibrary

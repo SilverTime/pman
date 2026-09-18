@@ -905,6 +905,37 @@ mod tests {
     }
 
     #[test]
+    fn updating_credentials_clears_stale_check_evidence() {
+        let (_temp, mut vault, _address) = vault_with_connection();
+        grant_client(&mut vault, "client-one");
+        vault
+            .record_check_evidence(
+                "api",
+                DIMENSION_IDENTITY,
+                CheckEvidence {
+                    state: "verified".into(),
+                    checked_at: crate::vault::now(),
+                    ..CheckEvidence::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            vault.connection_status("api").unwrap().identity.state,
+            STATE_VERIFIED
+        );
+        vault
+            .rotate_secret("api", json!({"token": "brand-new-synthetic"}))
+            .unwrap();
+        let status = vault.connection_status("api").unwrap();
+        assert_eq!(
+            status.identity.state,
+            STATE_UNCHECKED,
+            "更换凭据后旧身份证据必须清除"
+        );
+        assert_eq!(status.identity.label, "尚未检查");
+    }
+
+    #[test]
     fn legacy_e10_evidence_is_readable_through_the_contract() {
         let temp = tempfile::tempdir().unwrap();
         let mut vault = Vault::open(temp.path()).unwrap();

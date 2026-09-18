@@ -544,6 +544,28 @@ pub fn grant_connection(
     if connection.site_url != site_url || details.account != account || details.tenant != tenant {
         return Err("连接账号已变化，请刷新后重新确认授权".into());
     }
+    // Validate every selected client up front so a failure can name the tool
+    // by its display name (never by identity material) before any write.
+    for id in &client_ids {
+        let record = core
+            .vault
+            .list_clients()
+            .map_err(safe_error)?
+            .into_iter()
+            .find(|client| client.id == *id)
+            .ok_or("客户端不存在，授权未保存；请刷新后重试")?;
+        let expired = record.expires_at.as_deref().is_some_and(|value| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .map(|parsed| parsed <= chrono::Utc::now())
+                .unwrap_or(true)
+        });
+        if !record.paired || record.revoked_at.is_some() || expired {
+            return Err(format!(
+                "客户端「{}」已失效，授权未保存；请取消勾选后重试",
+                record.name
+            ));
+        }
+    }
     core.vault
         .grant_connection_clients(&site, &client_ids)
         .map_err(safe_error)

@@ -514,6 +514,40 @@ impl Vault {
             "UPDATE sites SET secret_cipher=?, updated_at=? WHERE alias=?",
             params![cipher, now(), alias],
         )?;
+        // Fresh credentials invalidate previous check evidence: the old
+        // identity/API results no longer describe the stored secret.
+        self.clear_check_evidence(alias)?;
+        Ok(())
+    }
+
+    /// Remove identity/API check evidence (and legacy status keys). Used when
+    /// credentials change, the address changes, or a backup is restored.
+    pub fn clear_check_evidence(&mut self, alias: &str) -> Result<(), VaultError> {
+        let mut details = self.details(alias)?;
+        if !details.extra.is_object() {
+            return Ok(());
+        }
+        let keys = [
+            "identity_check",
+            "api_check",
+            "status",
+            "checked_at",
+            "last_checked_at",
+        ];
+        let changed = {
+            let object = details.extra.as_object_mut().expect("extra is object");
+            let before = object.len();
+            for key in keys {
+                object.remove(key);
+            }
+            object.len() != before
+        };
+        if changed {
+            self.conn.execute(
+                "INSERT INTO connection_details(alias,details_json) VALUES(?,?) ON CONFLICT(alias) DO UPDATE SET details_json=excluded.details_json",
+                params![alias, serde_json::to_string(&details)?],
+            )?;
+        }
         Ok(())
     }
 
@@ -555,6 +589,7 @@ impl Vault {
         if previous.site_url != site_url {
             self.revoke_connection_grants(alias)?;
             self.update_details(alias, serde_json::json!({"ai_enabled":false}))?;
+            self.clear_check_evidence(alias)?;
         }
         let name = input.name.and_then(|value| {
             let value = value.trim().to_owned();

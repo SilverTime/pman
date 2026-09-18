@@ -1003,7 +1003,11 @@ export function ConnectionLibrary({
             if (!action.busy) setDeleting(null);
           }}
         >
-          <p>删除账号连接后，AI 将无法继续使用这个连接。历史活动记录保留。</p>
+          <p>
+            删除后立即生效：该连接保存的凭据被移除；所有 AI
+            客户端对此连接的授权规则被撤销；正在进行的网页会话被关闭；AI
+            后续调用会被拒绝。历史活动记录保留。
+          </p>
           <Notice error={action.error} />
           <div className="modal-actions">
             <button
@@ -1623,13 +1627,28 @@ function ConnectionConsent({
     await action.run(async () => {
       if (!selected.length || blocked || changed)
         throw new Error("连接或客户端状态已变化，请返回并重新确认授权。");
-      await call("grant_connection", {
-        site: site.alias,
-        clientIds: selected,
-        siteUrl: captured.current.url,
-        account: captured.current.account || "",
-        tenant: captured.current.tenant || "",
-      });
+      try {
+        await call("grant_connection", {
+          site: site.alias,
+          clientIds: selected,
+          siteUrl: captured.current.url,
+          account: captured.current.account || "",
+          tenant: captured.current.tenant || "",
+        });
+      } catch (error) {
+        // The backend rejects the whole batch atomically; name the tools that
+        // turned ineligible so the user can fix one without re-granting all.
+        const ineligible = selected
+          .map((id) => clients.find((client) => client.id === id))
+          .filter((client) => client && !clientActive(client))
+          .map((client) => client!.name);
+        if (ineligible.length) {
+          throw new Error(
+            `以下客户端已失效，本次授权未保存：${ineligible.join("、")}。请取消勾选后重试。`,
+          );
+        }
+        throw error;
+      }
       setSaved(true);
       await onRefresh();
       await checkClients(selected);
@@ -1748,6 +1767,27 @@ function ConnectionConsent({
               </Empty>
             )}
           </div>
+          {eligible.length > 1 && (
+            <div className="button-row consent-bulk">
+              <button
+                className="text-button"
+                disabled={action.busy}
+                onClick={() => setSelected(eligible.map((client) => client.id))}
+              >
+                全选
+              </button>
+              <button
+                className="text-button"
+                disabled={action.busy || !selected.length}
+                onClick={() => setSelected([])}
+              >
+                清除选择
+              </button>
+              <small className="muted">
+                已选 {selected.length} / {eligible.length}
+              </small>
+            </div>
+          )}
           <button
             className="text-button"
             disabled={action.busy}

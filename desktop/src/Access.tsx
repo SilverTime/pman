@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AllowRule,
+  AuditEntry,
   call,
   Client,
   ClientKind,
@@ -24,6 +25,7 @@ export function Access({
   clients,
   harnesses,
   sites,
+  audit,
   onRefresh,
   focusSite,
   focusHarness,
@@ -31,6 +33,7 @@ export function Access({
   clients: Client[];
   harnesses: HarnessSummary[];
   sites: SiteSummary[];
+  audit: AuditEntry[];
   onRefresh: () => Promise<void>;
   focusSite: string | null;
   focusHarness: string | null;
@@ -42,6 +45,11 @@ export function Access({
   const [editing, setEditing] = useState<HarnessSummary | null>(null);
   const [revoking, setRevoking] = useState<Client | null>(null);
   const [removing, setRemoving] = useState<AllowRule | null>(null);
+  const [handshake, setHandshake] = useState<{
+    ok: boolean;
+    message: string;
+    connections?: { alias?: string }[];
+  } | null>(null);
   const action = useAction();
   const entries = useMemo(
     () => [
@@ -78,6 +86,35 @@ export function Access({
   useEffect(() => {
     if (focusSite && active) setGranting(true);
   }, [focusSite]);
+  useEffect(() => {
+    setHandshake(null);
+  }, [selected]);
+  // Real usage evidence: business-shaped audit records from this harness.
+  // A handshake or CLI self-check never writes these entries.
+  const lastRealCall = useMemo(() => {
+    if (!active) return null;
+    return (
+      [...audit]
+        .filter(
+          (entry) =>
+            entry.harness === active.harness &&
+            entry.status_code != null &&
+            entry.note !== "pending_approval",
+        )
+        .sort((a, b) => b.ts.localeCompare(a.ts))[0] || null
+    );
+  }, [entries, active]);
+  async function runHandshake() {
+    if (!active?.client) return;
+    await action.run(async () => {
+      const result = await call<{
+        ok: boolean;
+        message: string;
+        connections?: { alias?: string }[];
+      }>("client_handshake", { id: active.client!.id });
+      setHandshake(result);
+    });
+  }
   return (
     <div className="page access-page">
       <div className="page-heading">
@@ -174,6 +211,45 @@ export function Access({
                   />
                 </div>
               </header>
+              {active.client && !active.client.revoked_at && (
+                <section className="access-loop" aria-label="接入闭环">
+                  <header>
+                    <h3>接入闭环</h3>
+                    <p>配对握手与真实调用是不同证据，分别显示。</p>
+                  </header>
+                  <div className="loop-row">
+                    <Badge tone={handshake?.ok ? "success" : "neutral"}>
+                      {handshake ? (handshake.ok ? "本机配对正常" : "握手失败") : "尚未握手"}
+                    </Badge>
+                    <span className="loop-text">
+                      {handshake
+                        ? `${handshake.message}${
+                            handshake.connections?.length
+                              ? ` · 已授权 ${handshake.connections.length} 个连接`
+                              : " · 尚无已授权连接"
+                          }`
+                        : "写入配置并重载工具后，用“身份握手”确认配对通道。"}
+                    </span>
+                    <button
+                      className="text-button"
+                      disabled={action.busy}
+                      onClick={() => void runHandshake()}
+                    >
+                      身份握手
+                    </button>
+                  </div>
+                  <div className="loop-row">
+                    <Badge tone={lastRealCall ? "success" : "neutral"}>
+                      {lastRealCall ? "工具已实际调用" : "等待首次调用"}
+                    </Badge>
+                    <span className="loop-text">
+                      {lastRealCall
+                        ? `最近真实调用 ${sites.find((site) => site.alias === lastRealCall.site)?.name || lastRealCall.site} · 响应 ${lastRealCall.status_code} · ${timestamp(lastRealCall.ts)}`
+                        : "重载工具之前的首次真实请求不会显示在这里；握手通过不代表工具已加载配置。"}
+                    </span>
+                  </div>
+                </section>
+              )}
               <div className="scope-heading">
                 <div>
                   <h3>允许使用的连接</h3>

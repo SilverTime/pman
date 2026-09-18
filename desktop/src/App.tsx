@@ -646,6 +646,7 @@ function Workbench({
               clients={clients}
               harnesses={harnesses}
               sites={sites}
+              audit={entries}
               onRefresh={refresh}
               focusSite={focusSite}
               focusHarness={focusHarness}

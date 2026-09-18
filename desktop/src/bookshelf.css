@@ -1065,3 +1065,41 @@
     display: none;
   }
 }
+
+.access-loop {
+  border: var(--line-width) solid var(--line-subtle);
+  border-radius: var(--r1);
+  padding: var(--s3);
+  margin-bottom: var(--s4);
+}
+.access-loop > header h3 {
+  font-size: var(--text-body);
+  font-weight: 500;
+  margin: 0 0 var(--s1);
+}
+.access-loop > header p {
+  margin: 0 0 var(--s2);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.loop-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) 0;
+  border-top: var(--line-width) solid var(--line-subtle);
+}
+.loop-row:first-of-type {
+  border-top: none;
+}
+.loop-row .loop-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+@media (max-width: 1180px) {
+  .loop-row {
+    flex-wrap: wrap;
+  }
+}

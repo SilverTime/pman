@@ -163,6 +163,100 @@ fn stale_management_verification_and_revoked_identity_are_rejected() {
 }
 
 #[test]
+fn handshake_proves_pairing_but_never_claims_real_usage() {
+    let (_dir, shared) = fixture("https://example.test");
+    let handshake = shared.dispatch(IpcRequest {
+        client_id: "test-pair".into(),
+        proof: PROOF.into(),
+        operation: "handshake".into(),
+        args: json!({}),
+    });
+    assert_eq!(handshake["ok"], true);
+    assert_eq!(handshake["harness"], "test-client");
+    assert_eq!(handshake["connections"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        handshake["connections"][0]["alias"], "fixture",
+        "握手只报告已授权连接"
+    );
+    // The handshake timestamp is identity-verification evidence only; no
+    // business-shaped audit entry exists for this harness yet, so the UI's
+    // "工具已实际调用" state stays "等待首次调用".
+    assert!(handshake["identity_last_used_at"].is_string());
+    assert_eq!(
+        shared
+            .core
+            .lock()
+            .unwrap()
+            .vault
+            .query_audit(Some("test-client"), 100)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.status_code.is_some() && entry.note != Some("handshake".into()))
+            .count(),
+        0,
+        "握手不产生业务调用记录"
+    );
+    // A forged identity cannot complete the handshake.
+    let forged = shared.dispatch(IpcRequest {
+        client_id: "test-pair".into(),
+        proof: "b".repeat(64),
+        operation: "handshake".into(),
+        args: json!({}),
+    });
+    assert_eq!(forged["error_code"], "harness_invalid");
+}
+
+#[test]
+fn same_display_name_with_different_uuids_keeps_identities_separate() {
+    const B_PROOF: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let (_dir, shared) = fixture("https://example.test");
+    {
+        let mut core = shared.core.lock().unwrap();
+        core.vault
+            .pair_client_for(
+                "Fixture",
+                "generic",
+                "test-client-b",
+                "test-pair-b",
+                &hex::encode(Sha256::digest(B_PROOF.as_bytes())),
+            )
+            .unwrap();
+    }
+    // Each pairing authenticates only with its own proof.
+    assert_eq!(status(&shared)["harness"], "test-client");
+    let second = shared.dispatch(IpcRequest {
+        client_id: "test-pair-b".into(),
+        proof: B_PROOF.into(),
+        operation: "status".into(),
+        args: json!({}),
+    });
+    assert_eq!(second["harness"], "test-client-b");
+    // Cross-usage fails: one client's proof cannot authenticate the other id
+    // even though both clients share the same display name.
+    let forged = shared.dispatch(IpcRequest {
+        client_id: "test-pair".into(),
+        proof: B_PROOF.into(),
+        operation: "status".into(),
+        args: json!({}),
+    });
+    assert_eq!(forged["error_code"], "harness_invalid", "同名不同 UUID 不得串用身份");
+    assert_eq!(
+        shared
+            .core
+            .lock()
+            .unwrap()
+            .vault
+            .list_clients()
+            .unwrap()
+            .iter()
+            .filter(|client| client.name == "Fixture")
+            .count(),
+        2,
+        "两个同名客户端是独立的配对记录"
+    );
+}
+
+#[test]
 fn management_lock_neither_changes_connection_evidence_nor_stops_api() {
     use pman_core::status::{CheckEvidence, DIMENSION_IDENTITY};
     let (_dir, shared) = fixture("https://example.test");

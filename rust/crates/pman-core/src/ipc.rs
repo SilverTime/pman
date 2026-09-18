@@ -124,6 +124,37 @@ pub fn resolve_alias(alias: &str) -> String {
 pub fn dispatch_metadata(vault: &crate::Vault, request: &IpcRequest, harness: &str) -> Value {
     match request.operation.as_str() {
         "contract" | "ai-help" => contract(),
+        // Identity/capability handshake with no business side effects. It
+        // proves the pairing channel and reports granted aliases; it is NOT
+        // evidence that an AI tool has made a real business call.
+        "handshake" => {
+            let connections: Vec<Value> = vault
+                .list_sites()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| {
+                    s.auth_type != "password"
+                        && vault.details(&s.alias).is_ok_and(|d| d.ai_enabled)
+                        && visible_to(vault, harness, &s.alias)
+                })
+                .map(|s| json!({"alias":s.alias,"alias_ref":alias_ref(&s.alias),"origin":s.site_url}))
+                .collect();
+            // This timestamp covers identity verification (including this
+            // handshake); real business usage is audit-log evidence only.
+            let identity_last_used = vault
+                .list_clients()
+                .ok()
+                .and_then(|clients| {
+                    clients
+                        .iter()
+                        .filter(|c| c.harness == harness)
+                        .filter_map(|c| c.last_used_at.clone())
+                        .max()
+                });
+            result_ok(
+                json!({"handshake":"pman/2","harness":harness,"capabilities":["http","sites","resolve_scenario","approval"],"connections":connections,"identity_last_used_at":identity_last_used}),
+            )
+        }
         "status" => result_ok(
             json!({"service_running":vault.unlocked(),"service_paused":!vault.unlocked(),"management_authentication":"desktop_only"}),
         ),
@@ -339,7 +370,7 @@ pub fn dispatch_assistance(
 
 pub fn contract() -> Value {
     result_ok(
-        json!({"contract":"pman-ai/2","summary":"Local credential broker. Resolve configured business scenarios and call aliases; never read passwords, cookies, tokens or vault files. Only a human may approve or resume service.","operations":["contract","sites","status","resolve_scenario","active_context","credential_status","http","approval_wait","request_status","request_access","request_login"],"scenario_resolution":"resolve_scenario returns exactly one configured connection and business capability, or fails closed when context is missing or ambiguous.","approval":"pending_approval requires a human decision in pman desktop. The human may approve once or persist the exact client, connection, method, path and optional business capability; retry after the decision.","service_lifecycle":"Windows screen lock and management lock do not interrupt granted AI access. Explicit pause persists until the user resumes.","identity":"Client identity proof is DPAPI-protected. Client names do not confer permission."}),
+        json!({"contract":"pman-ai/2","summary":"Local credential broker. Resolve configured business scenarios and call aliases; never read passwords, cookies, tokens or vault files. Only a human may approve or resume service.","operations":["contract","handshake","sites","status","resolve_scenario","active_context","credential_status","http","approval_wait","request_status","request_access","request_login"],"scenario_resolution":"resolve_scenario returns exactly one configured connection and business capability, or fails closed when context is missing or ambiguous.","approval":"pending_approval requires a human decision in pman desktop. The human may approve once or persist the exact client, connection, method, path and optional business capability; retry after the decision.","service_lifecycle":"Windows screen lock and management lock do not interrupt granted AI access. Explicit pause persists until the user resumes.","identity":"Client identity proof is DPAPI-protected. Client names do not confer permission."}),
     )
 }
 

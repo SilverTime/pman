@@ -848,6 +848,46 @@ pub fn client_config_restore(
     let _guard = admin(&window, &state)?;
     client_config::restore(&client(&state, &id)?, &state.home)
 }
+/// Identity/capability handshake through the real pairing channel (DPAPI
+/// capability file + named pipe). It proves local pairing and proxy health
+/// and lists granted connections; it is never a claim that the AI tool has
+/// made a real business call — that evidence comes from the audit log.
+#[tauri::command]
+pub async fn client_handshake(
+    id: String,
+    window: WebviewWindow,
+    state: State<'_, Shared>,
+) -> Result<Value, String> {
+    ensure_main(&window)?;
+    state.require_management()?;
+    let client = client(&state, &id)?;
+    let harness = client["harness"].as_str().unwrap_or_default().to_owned();
+    if client["revoked_at"].is_string() {
+        return Err("此客户端已撤销，请重新配对".into());
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        ipc::call(&id, "handshake", json!({}))
+    })
+    .await
+    .map_err(|_| "握手检查失败")?
+    .map_err(|_| "原生代理连接失败，请检查配对和服务状态")?;
+    state.require_management()?;
+    Ok(json!({
+        "ok": result["ok"] == true,
+        "harness": result.get("harness").and_then(Value::as_str).unwrap_or(&harness),
+        "connections": result.get("connections").cloned().unwrap_or(json!([])),
+        "identity_last_used_at": result
+            .get("identity_last_used_at")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "message": if result["ok"] == true {
+            "身份握手成功：本机配对与代理通道正常"
+        } else {
+            "客户端身份验证失败"
+        },
+    }))
+}
+
 #[tauri::command]
 pub async fn client_test(
     id: String,

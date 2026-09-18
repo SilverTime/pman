@@ -82,6 +82,7 @@ pub fn run() {
             backend::client_config_apply,
             backend::client_config_restore,
             backend::client_test,
+            backend::client_handshake,
             storage::vault_backup,
             storage::vault_import,
             storage::vault_migrate_legacy,

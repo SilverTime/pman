@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "pman": {
+      "command": "pm",
+      "args": ["mcp", "--daemon", "http://127.0.0.1:9777"],
+      "env": {
+        "PM_TOKEN": "pm_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    }
+  }
+}

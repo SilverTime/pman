@@ -1,0 +1,28 @@
+{
+  "name": "pman-desktop",
+  "private": true,
+  "version": "0.4.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "build:native": "node scripts/build-native.mjs",
+    "build:bundle": "npm run build:native && npm run build",
+    "test:ui": "node src/workbench.test.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.0.0",
+    "react": "17.0.2",
+    "react-dom": "17.0.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.0.0",
+    "@types/react": "17.0.10",
+    "@types/react-dom": "17.0.10",
+    "@vitejs/plugin-react": "4.2.0",
+    "typescript": "5.3.3",
+    "vite": "4.5.5"
+  }
+}

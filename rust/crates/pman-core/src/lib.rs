@@ -1,0 +1,54 @@
+//! Rust broker boundary. Storage and HTTP execution land here after protocol parity.
+
+mod assistance;
+mod backup;
+mod broker;
+mod daemon;
+pub mod e10;
+mod http_proxy;
+pub mod ipc;
+mod policy;
+mod request_lifecycle;
+mod vault;
+mod workspace;
+
+pub use assistance::{AssistanceRequest, AssistanceScope};
+pub use broker::{
+    Authorization, Broker, BrokerError, BrokerResult, CompletedCall, PreparedCall, REDACTED,
+};
+pub use daemon::{DaemonClient, DaemonError};
+pub use http_proxy::{CleanResponse, ProxyError, RawResponse};
+pub use pman_protocol::{HttpRequest, ProtocolError, ResultEnvelope};
+pub use policy::{
+    AllowRule, ApprovalPolicy, Decision, DefaultAction, Policy, PolicyError, RateLimit,
+    RateLimiter, RedactionPolicy, RequestConstraints,
+};
+pub use vault::{
+    ApprovalSummary, AuditEntry, AuditEntryInput, HarnessSummary, SiteInput, SiteMetadataUpdate,
+    SiteSummary, Vault, VaultError,
+};
+pub use workspace::{ClientSummary, ConnectionDetails, ScenarioMatch, ScenarioRoute};
+
+/// Validate a request at the core boundary before any credential lookup.
+pub fn validate_http_request(request: HttpRequest) -> Result<HttpRequest, ProtocolError> {
+    request.validate()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_reuses_protocol_validation() {
+        let request = HttpRequest {
+            site: "gitlab".to_owned(),
+            method: "GET".to_owned(),
+            path: "/api/v4/version".to_owned(),
+            capability: None,
+            query: None,
+            json_body: None,
+            form: None,
+        };
+        assert!(validate_http_request(request).is_ok());
+    }
+}

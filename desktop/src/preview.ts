@@ -1,0 +1,208 @@
+import {
+  ApprovalSummary,
+  AssistanceRequest,
+  AuditEntry,
+  Client,
+  HarnessSummary,
+  SiteSummary,
+  VaultStatus,
+} from "./api";
+
+// Explicit browser-only, read-only visual preview. No credentials or live connection data.
+const date = "2026-09-15T09:36:00+08:00";
+export const previewData: {
+  status: VaultStatus;
+  sites: SiteSummary[];
+  harnesses: HarnessSummary[];
+  clients: Client[];
+  approvals: ApprovalSummary[];
+  assistance: AssistanceRequest[];
+  entries: AuditEntry[];
+} = {
+  status: {
+    home: "",
+    initialized: true,
+    unlocked: true,
+    management_locked: false,
+    service_running: true,
+    service_paused: false,
+    pending_approvals: 1,
+    hello_available: false,
+    ai_proxy: {
+      state: "ready",
+      address: "",
+      managed: true,
+      detail: "合成数据预览",
+    },
+  },
+  sites: [
+    {
+      id: "sample-e10",
+      alias: "e10-test",
+      name: "E10 测试环境",
+      site_url: "https://e10.example.test",
+      auth_type: "e10",
+      purpose: "前端调试与国际化接口。",
+      tags: [],
+      details: {
+        account: "developer@example.test",
+        environment: "测试",
+        group: "工作",
+        tenant: "演示租户",
+        favorite: true,
+        ai_enabled: true,
+      },
+      created_at: date,
+      updated_at: date,
+      last_used_at: date,
+      last_checked_at: date,
+      status: "connected",
+    },
+    {
+      id: "sample-git",
+      alias: "gitlab",
+      name: "GitLab",
+      site_url: "https://git.example.test",
+      auth_type: "api_token",
+      tags: [],
+      details: {
+        account: "developer",
+        environment: "工作",
+        group: "工作",
+        favorite: true,
+        ai_enabled: true,
+      },
+      created_at: date,
+      updated_at: date,
+      last_used_at: date,
+      status: "active",
+    },
+    {
+      id: "sample-work",
+      alias: "work-mail",
+      name: "工作邮箱",
+      site_url: "https://mail.example.test",
+      auth_type: "password",
+      tags: [],
+      details: {
+        account: "hello@example.test",
+        environment: "个人",
+        group: "个人",
+        ai_enabled: false,
+      },
+      created_at: date,
+      updated_at: date,
+      status: "active",
+    },
+    {
+      id: "sample-prod",
+      alias: "e10-prod",
+      name: "E10 生产环境",
+      site_url: "https://production.example.test",
+      auth_type: "e10",
+      tags: [],
+      details: {
+        account: "developer@example.test",
+        environment: "生产",
+        group: "工作",
+        ai_enabled: false,
+      },
+      created_at: date,
+      updated_at: date,
+      status: "expired",
+    },
+  ],
+  clients: [
+    {
+      id: "sample-codex",
+      name: "Codex",
+      kind: "codex",
+      harness: "codex",
+      paired: true,
+      created_at: date,
+      last_used_at: date,
+    },
+  ],
+  harnesses: [
+    {
+      name: "codex",
+      created_at: date,
+      policy: {
+        default_action: "deny",
+        allow: [
+          {
+            site: "e10-test",
+            methods: ["GET"],
+            paths: ["/api/ebuilder/**"],
+            operation: "query",
+          },
+          {
+            site: "gitlab",
+            methods: ["GET"],
+            paths: ["/api/v4/**"],
+            operation: "query",
+          },
+        ],
+      },
+    },
+  ],
+  assistance: [
+    {
+      id: "sample-access",
+      client_id: "sample-codex",
+      harness: "codex",
+      site: "gitlab",
+      kind: "access",
+      requested_scope: {
+        method: "POST",
+        path: "/api/v4/projects/42/issues",
+        operation: "write",
+      },
+      reason: "为演示项目创建问题记录",
+      status: "pending",
+      created_at: date,
+      updated_at: date,
+    },
+  ],
+  approvals: [
+    {
+      id: "sample-request",
+      ts: date,
+      harness: "codex",
+      site: "e10-test",
+      method: "POST",
+      path: "/api/ebuilder/label",
+      payload: { body: { label: "示例词条" } },
+      status: "pending",
+    },
+  ],
+  entries: [
+    {
+      id: 1,
+      ts: date,
+      harness: "codex",
+      site: "gitlab",
+      method: "GET",
+      path: "/api/v4/projects",
+      status_code: 200,
+      resp_bytes: 2064,
+      redactions: 1,
+      truncated: false,
+      approved: false,
+    },
+    {
+      id: 2,
+      ts: date,
+      harness: "codex",
+      site: "e10-test",
+      method: "POST",
+      path: "/api/ebuilder/label",
+      status_code: 403,
+      resp_bytes: 0,
+      redactions: 0,
+      truncated: false,
+      approved: false,
+      note: "pending_approval",
+    },
+  ],
+};

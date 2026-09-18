@@ -1,0 +1,9 @@
+# codex 集成示例：将 pman 注册为 MCP server
+# 文件：~/.codex/config.toml
+# 先运行：pm token issue codex --expires-days 30
+# 以及：  pm daemon --port 9777
+
+[mcp_servers.pman]
+command = "pm"
+args = ["mcp", "--daemon", "http://127.0.0.1:9777"]
+env = { PM_TOKEN = "pm_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }

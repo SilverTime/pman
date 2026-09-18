@@ -1,0 +1,13 @@
+{
+  "rate_limit": { "req_per_min": 30 },
+  "allow": [
+    { "site": "gitlab", "methods": ["GET"], "paths": ["/api/v4/projects/**", "/api/v4/version"] },
+    { "site": "sonar", "methods": ["GET"], "paths": ["/api/**"] }
+  ],
+  "approval": { "required_for": ["POST", "PUT", "DELETE"] },
+  "redact": {
+    "strip_headers": ["set-cookie", "authorization"],
+    "json_keys": ["(?i).*token.*", "(?i).*password.*", "(?i).*secret.*", "(?i).*cookie.*"],
+    "max_response_bytes": 262144
+  }
+}

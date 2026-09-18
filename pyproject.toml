@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pman"
+version = "0.3.0"
+description = "面向 AI harness（codex/Claude Code/deepseek-harness）的本地凭据代理"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["cryptography>=41.0"]
+
+[project.scripts]
+pm = "pman.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

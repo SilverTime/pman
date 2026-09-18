@@ -1,0 +1,13 @@
+{
+  "rate_limit": { "req_per_min": 120 },
+  "allow": [
+    { "site": "gitlab", "methods": ["GET"], "paths": ["/api/v4/projects/**", "/api/v4/issues/**", "/api/v4/merge_requests/**"] },
+    { "site": "jira", "methods": ["GET", "POST"], "paths": ["/rest/api/2/search", "/rest/api/2/issue/**"] }
+  ],
+  "approval": { "required_for": ["POST", "PUT", "DELETE"] },
+  "redact": {
+    "strip_headers": ["set-cookie", "authorization"],
+    "json_keys": ["(?i).*token.*", "(?i).*password.*", "(?i).*secret.*", "(?i).*cookie.*", "(?i).*authorization.*"],
+    "max_response_bytes": 1048576
+  }
+}

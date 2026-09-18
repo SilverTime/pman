@@ -1,0 +1,31 @@
+__pycache__/
+*.pyc
+.venv/
+vault/
+.smoke/
+*.egg-info/
+build/
+dist/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.local
+
+# JavaScript dependencies and generated output
+node_modules/
+coverage/
+
+# Rust / Tauri build output
+target/
+desktop/src-tauri/bin/*.exe
+
+# Editors and operating-system metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Unrelated local reference checkout
+dsh-anchored-standard/

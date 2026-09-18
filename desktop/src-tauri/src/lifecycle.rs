@@ -21,7 +21,7 @@ impl Default for Settings {
         Self {
             autostart: true,
             idle_lock_minutes: 15,
-            theme: "dark".into(),
+            theme: "light".into(),
             reduced_motion: false,
             hello_enabled: true,
             legacy_http_enabled: false,

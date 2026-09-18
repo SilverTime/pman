@@ -2,6 +2,8 @@ import { ReactNode, useEffect, useRef, useState } from "react";
 import { errorText } from "./api";
 
 export type IconName =
+  | "link"
+  | "grid"
   | "vault"
   | "shield"
   | "activity"
@@ -32,6 +34,19 @@ export type IconName =
   | "moon"
   | "logout";
 const paths: Record<IconName, ReactNode> = {
+  link: (
+    <>
+      <path d="m10 13 4-4M8 15l-2 2a4 4 0 0 1-5-5l5-5a4 4 0 0 1 6 0M12 17a4 4 0 0 0 6 0l5-5a4 4 0 0 0-5-5l-2 2" />
+    </>
+  ),
+  grid: (
+    <>
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" />
+    </>
+  ),
   vault: (
     <>
       <rect x="4" y="3" width="16" height="18" rx="2" />
@@ -159,12 +174,22 @@ export function Brand() {
   return (
     <div className="brand">
       <span className="brand-symbol">
-        <Icon name="vault" size={24} />
+        <svg
+          width="30"
+          height="36"
+          viewBox="0 0 30 36"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path
+            d="M15 1 5 11v22l7-7V14l5-5 6 6-6 6v9l12-12V12L15 1Z"
+            fill="currentColor"
+          />
+          <path d="m12 20 5-5v9l-5 5v-9Z" fill="currentColor" opacity=".55" />
+        </svg>
       </span>
       <div>
-        <strong>
-          pman<span> / </span>
-        </strong>
+        <strong>pman</strong>
         <small>本地授权工作台</small>
       </div>
     </div>
@@ -335,12 +360,12 @@ export function useAction() {
   const [message, setMessage] = useState<string | null>(null);
   const mounted = useRef(true);
   const working = useRef(false);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
       mounted.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
   async function run<T>(
     action: () => Promise<T>,
     success?: string,

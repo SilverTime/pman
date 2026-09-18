@@ -491,6 +491,34 @@ pub fn remove_harness_allow_rule(
     .map_err(safe_error)
 }
 #[tauri::command]
+pub fn grant_connection(
+    site: String,
+    client_ids: Vec<String>,
+    site_url: String,
+    account: String,
+    tenant: String,
+    window: WebviewWindow,
+    state: State<Shared>,
+) -> Result<(), String> {
+    let _guard = admin(&window, &state)?;
+    let mut core = state.core.lock().map_err(|_| "服务状态不可用")?;
+    let connection = core
+        .vault
+        .list_sites()
+        .map_err(safe_error)?
+        .into_iter()
+        .find(|item| item.alias == site)
+        .ok_or("连接不存在")?;
+    let details = core.vault.details(&site).map_err(safe_error)?;
+    if connection.site_url != site_url || details.account != account || details.tenant != tenant {
+        return Err("连接账号已变化，请刷新后重新确认授权".into());
+    }
+    core.vault
+        .grant_connection_clients(&site, &client_ids)
+        .map_err(safe_error)
+}
+
+#[tauri::command]
 pub fn grant_add(
     harness: String,
     site: String,

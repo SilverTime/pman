@@ -21,7 +21,7 @@
   --danger-bg: #392524;
   --shadow: 0 24px 64px #00000066;
   --backdrop: #050b0db3;
-  --font: "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font: "IBM Plex Sans", "Noto Sans SC Variable", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
   --font-code: "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
   --text-xs: 11px;
   --text-sm: 12px;
@@ -60,19 +60,19 @@
 }
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f2f5f3;
-  --sidebar: #e9efeb;
-  --surface: #ffffff;
-  --raised: #f5f8f6;
-  --hover: #e6eee9;
-  --selection: #d5e9df;
-  --line: #c6d3cc;
-  --line-subtle: #dce4df;
-  --text: #1d2b24;
-  --muted: #4c6257;
-  --subtle: #586e63;
-  --accent: #286b52;
-  --accent-hover: #20583f;
+  --bg: #f7f7f4;
+  --sidebar: #f1f2ed;
+  --surface: #fdfdfb;
+  --raised: #f5f5f0;
+  --hover: #ebeee7;
+  --selection: #e3ebe2;
+  --line: #cfd6cc;
+  --line-subtle: #e0e4dc;
+  --text: #25342d;
+  --muted: #58675d;
+  --subtle: #617064;
+  --accent: #305f48;
+  --accent-hover: #234b38;
   --accent-ink: #ffffff;
   --warning: #80581e;
   --warning-bg: #faf0db;

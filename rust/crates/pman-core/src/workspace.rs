@@ -59,6 +59,75 @@ pub struct ClientSummary {
 }
 
 impl Vault {
+    /// Human-confirmed connection-wide consent. Validate every recipient before
+    /// writing, then enable the connection and append policies atomically.
+    pub fn grant_connection_clients(
+        &mut self,
+        alias: &str,
+        client_ids: &[String],
+    ) -> Result<(), VaultError> {
+        self.ensure_unlocked()?;
+        let site = self
+            .list_sites()?
+            .into_iter()
+            .find(|s| s.alias == alias)
+            .ok_or_else(|| VaultError::UnknownSite(alias.into()))?;
+        if site.auth_type == "password" || site.site_url.is_empty() || client_ids.is_empty() {
+            return Err(VaultError::InvalidSchema(
+                "请选择连接和至少一个有效的 AI 客户端".into(),
+            ));
+        }
+        let clients = self.list_clients()?;
+        let rule = serde_json::json!({"site":alias,"methods":["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"],"paths":["/**"],"require_approval":false});
+        let mut policies = BTreeMap::new();
+        for id in client_ids {
+            let client = clients
+                .iter()
+                .find(|c| {
+                    &c.id == id
+                        && c.paired
+                        && c.revoked_at.is_none()
+                        && !expired(c.expires_at.as_deref())
+                })
+                .ok_or(VaultError::InvalidClient)?;
+            let harness = self
+                .get_harness(&client.harness)?
+                .ok_or(VaultError::InvalidClient)?;
+            if harness.revoked_at.is_some() || expired(harness.expires_at.as_deref()) {
+                return Err(VaultError::InvalidClient);
+            }
+            let mut policy = self.get_policy(&client.harness)?;
+            let object = policy
+                .as_object_mut()
+                .ok_or_else(|| VaultError::InvalidSchema("invalid policy".into()))?;
+            let allow = object
+                .entry("allow")
+                .or_insert_with(|| serde_json::json!([]))
+                .as_array_mut()
+                .ok_or_else(|| VaultError::InvalidSchema("invalid allow rules".into()))?;
+            if !allow.contains(&rule) {
+                allow.push(rule.clone());
+            }
+            crate::Policy::from_json(&policy)
+                .map_err(|e| VaultError::InvalidSchema(e.to_string()))?;
+            policies.insert(client.harness.clone(), serde_json::to_string(&policy)?);
+        }
+        let mut details = self.details(alias)?;
+        details.ai_enabled = true;
+        let details_json = serde_json::to_string(&details)?;
+        let tx = self.conn.transaction()?;
+        for (harness, policy) in policies {
+            tx.execute(
+                "UPDATE harnesses SET policy_json=? WHERE name=?",
+                params![policy, harness],
+            )?;
+        }
+        tx.execute("INSERT INTO connection_details(alias,details_json) VALUES(?,?) ON CONFLICT(alias) DO UPDATE SET details_json=excluded.details_json", params![alias, details_json])?;
+        tx.commit()?;
+        self.invalidate_requests();
+        Ok(())
+    }
+
     pub(crate) fn init_workspace_schema(&self) -> Result<(), VaultError> {
         self.conn.execute_batch("CREATE TABLE IF NOT EXISTS connection_details (alias TEXT PRIMARY KEY, details_json TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS native_clients (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, harness TEXT NOT NULL, proof_hash TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, expires_at TEXT, revoked_at TEXT);")?;
@@ -459,6 +528,85 @@ fn constant_eq(a: &[u8], b: &[u8]) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    fn connection_fixture() -> (tempfile::TempDir, Vault) {
+        let temp = tempfile::tempdir().unwrap();
+        let mut vault = Vault::open(temp.path()).unwrap();
+        vault.create("synthetic-password").unwrap();
+        vault
+            .add_site(crate::SiteInput::new(
+                "api",
+                "https://example.test",
+                "api_token",
+                json!({"token":"synthetic-only"}),
+            ))
+            .unwrap();
+        for id in ["client-one", "client-two"] {
+            vault
+                .pair_client_for(id, "generic", id, id, &"a".repeat(64))
+                .unwrap();
+        }
+        (temp, vault)
+    }
+    #[test]
+    fn connection_grant_is_scoped_idempotent_and_preserves_denies() {
+        let (_temp, mut vault) = connection_fixture();
+        vault.set_policy("client-one", json!({"allow":[{"site":"other","methods":["GET"],"paths":["/read"]}],"deny":[{"site":"api","methods":["DELETE"],"paths":["/protected"]}],"approval":{"required_for":["POST"]}})).unwrap();
+        let ids = vec!["client-one".into(), "client-two".into()];
+        vault.grant_connection_clients("api", &ids).unwrap();
+        let first = vault.get_policy("client-one").unwrap();
+        vault.grant_connection_clients("api", &ids).unwrap();
+        assert_eq!(vault.get_policy("client-one").unwrap(), first);
+        assert!(vault.details("api").unwrap().ai_enabled);
+        let policy = crate::Policy::from_json(&first).unwrap();
+        assert!(policy.authorize("api", "POST", "/new/path").allowed);
+        assert!(!policy.approval_required_for("api", "POST", "/new/path"));
+        assert!(!policy.authorize("api", "DELETE", "/protected").allowed);
+        assert!(!policy.authorize("unselected", "POST", "/new/path").allowed);
+        assert!(policy.authorize("other", "GET", "/read").allowed);
+        let rule = first["allow"].as_array().unwrap().last().unwrap().clone();
+        vault.remove_allow_rule("client-one", rule).unwrap();
+        assert!(
+            !crate::Policy::from_json(&vault.get_policy("client-one").unwrap())
+                .unwrap()
+                .authorize("api", "GET", "/new/path")
+                .allowed
+        );
+    }
+    #[test]
+    fn connection_grant_rejects_invalid_recipient_without_partial_writes() {
+        let (_temp, mut vault) = connection_fixture();
+        let before = vault.get_policy("client-one").unwrap();
+        assert!(vault
+            .grant_connection_clients("api", &["client-one".into(), "missing".into()])
+            .is_err());
+        assert_eq!(before, vault.get_policy("client-one").unwrap());
+        assert!(!vault.details("api").unwrap().ai_enabled);
+        vault.revoke_client("client-two").unwrap();
+        assert!(vault
+            .grant_connection_clients("api", &["client-one".into(), "client-two".into()])
+            .is_err());
+        assert_eq!(before, vault.get_policy("client-one").unwrap());
+        assert!(vault.grant_connection_clients("api", &[]).is_err());
+    }
+    #[test]
+    fn connection_grant_rejects_passwords_and_locked_vaults() {
+        let (_temp, mut vault) = connection_fixture();
+        vault
+            .add_site(crate::SiteInput::new(
+                "personal",
+                "",
+                "password",
+                json!({"password":"synthetic-only"}),
+            ))
+            .unwrap();
+        assert!(vault
+            .grant_connection_clients("personal", &["client-one".into()])
+            .is_err());
+        vault.lock();
+        assert!(vault
+            .grant_connection_clients("api", &["client-one".into()])
+            .is_err());
+    }
     #[test]
     fn identity_is_proof_bound_revocable_and_not_name_bound() {
         let t = tempfile::tempdir().unwrap();

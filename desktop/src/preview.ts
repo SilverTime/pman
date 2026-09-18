@@ -37,6 +37,36 @@ export const previewData: {
   },
   sites: [
     {
+      id: "sample-github",
+      alias: "github",
+      name: "GitHub",
+      site_url: "https://api.github.com",
+      auth_type: "api_token",
+      tags: [],
+      details: {
+        account: "alex-dev",
+        environment: "个人",
+        favorite: true,
+        ai_enabled: true,
+      },
+      created_at: date,
+      updated_at: date,
+      last_used_at: date,
+      status: "active",
+    },
+    {
+      id: "sample-notion",
+      alias: "notion",
+      name: "Notion",
+      site_url: "https://notion.example.test",
+      auth_type: "login",
+      tags: [],
+      details: { account: "个人空间", ai_enabled: true },
+      created_at: date,
+      updated_at: date,
+      status: "expired",
+    },
+    {
       id: "sample-e10",
       alias: "e10-test",
       name: "E10 测试环境",
@@ -114,6 +144,14 @@ export const previewData: {
   ],
   clients: [
     {
+      id: "sample-claude",
+      name: "Claude Code",
+      kind: "claude",
+      harness: "claude",
+      paired: true,
+      created_at: date,
+    },
+    {
       id: "sample-codex",
       name: "Codex",
       kind: "codex",
@@ -130,6 +168,20 @@ export const previewData: {
       policy: {
         default_action: "deny",
         allow: [
+          {
+            site: "github",
+            methods: [
+              "GET",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE",
+              "HEAD",
+              "OPTIONS",
+            ],
+            paths: ["/**"],
+            require_approval: false,
+          },
           {
             site: "e10-test",
             methods: ["GET"],

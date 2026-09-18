@@ -35,6 +35,7 @@ async function load(entry, search = "", native = false) {
     module,
     exports: module.exports,
     URLSearchParams,
+    URL,
     window: {
       location: { search },
       ...(native ? { __TAURI_INTERNALS__: {} } : {}),
@@ -64,6 +65,87 @@ test("ordinary browser page does not silently pretend to be a live workbench", a
   assert.match(html, /打开 pman 桌面工作台/);
   assert.doesNotMatch(html, /developer@example\.test/);
   assert.equal(loaded.calls(), 0);
+});
+
+test("connection bookshelf renders without inventing browser or API verification", async () => {
+  const loaded = await load("./App.tsx", "?preview=1");
+  const html = renderToStaticMarkup(
+    React.createElement(loaded.exports.default),
+  );
+  assert.match(html, /连接书架/);
+  assert.match(html, /最近使用/);
+  assert.match(html, /添加连接/);
+  assert.match(html, /AI 工具/);
+  assert.doesNotMatch(html, /网页可用/);
+  assert.equal(loaded.calls(), 0);
+});
+
+test("whole connection labels exclude partial, expired and conditional rules", async () => {
+  const { exports: logic } = await load("./connections.ts");
+  const rule = {
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+    paths: ["/**"],
+    require_approval: false,
+  };
+  assert.equal(logic.wholeConnection(rule), true);
+  assert.equal(logic.wholeConnection({ ...rule, methods: ["GET"] }), false);
+  assert.equal(logic.wholeConnection({ ...rule, capability: "read" }), false);
+  assert.equal(
+    logic.wholeConnection({ ...rule, expires_at: "invalid" }),
+    false,
+  );
+  assert.equal(
+    logic.wholeConnection({ ...rule, require_approval: true }),
+    false,
+  );
+  assert.equal(
+    logic.wholeConnection({
+      ...rule,
+      constraints: { query: { tenant: ["one"] } },
+    }),
+    false,
+  );
+});
+
+test("saved credentials and paired clients are not presented as verified usage", async () => {
+  const { exports: logic } = await load("./connections.ts");
+  assert.equal(
+    logic.connectionAbility({ auth_type: "api_token", status: "active" }).text,
+    "凭据已保存",
+  );
+  assert.equal(
+    logic.connectionAbility({ auth_type: "login", status: "active" }).text,
+    "会话已保存",
+  );
+  assert.equal(
+    logic.clientActive({ paired: true, revoked_at: "2020-01-01" }),
+    false,
+  );
+  assert.equal(
+    logic.clientActive({ paired: true, expires_at: "invalid" }),
+    false,
+  );
+  assert.equal(logic.clientActive({ paired: true }), true);
+});
+
+test("connection summaries retain legacy default-allow policies but omit revoked policies", async () => {
+  const { exports: logic } = await load("./connections.ts");
+  const site = { alias: "api" };
+  const profiles = [
+    { name: "legacy", policy: { default_action: "allow" } },
+    {
+      name: "revoked",
+      revoked_at: "2020-01-01",
+      policy: { default_action: "allow" },
+    },
+    {
+      name: "expired",
+      expires_at: "2020-01-01",
+      policy: { allow: [{ site: "api" }] },
+    },
+  ];
+  assert.equal(logic.connectionGrants(site, profiles).length, 1);
+  assert.equal(logic.connectionGrants(site, profiles)[0].name, "legacy");
 });
 
 test("management lock preserves the AI running state and hides account metadata", async () => {
@@ -118,7 +200,10 @@ test("pending approvals offer both one-shot and persistent consent", async () =>
 });
 
 test("settings displays the runtime application version without hardcoding it", async () => {
-  const source = await readFile(new URL("./Settings.tsx", import.meta.url), "utf8");
+  const source = await readFile(
+    new URL("./Settings.tsx", import.meta.url),
+    "utf8",
+  );
   assert.match(source, /import \{ getVersion \} from "@tauri-apps\/api\/app"/);
   assert.match(source, /getVersion\(\)/);
   assert.match(source, /版本 \{appVersion \?\? "—"\}/);

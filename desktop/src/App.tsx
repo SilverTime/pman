@@ -2,7 +2,8 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Activity } from "./Activity";
 import { Access, GrantDialog } from "./Access";
-import { Credentials, LoginDialog } from "./Credentials";
+import { LoginDialog } from "./Credentials";
+import { ConnectionLibrary } from "./ConnectionLibrary";
 import { ImportDialog, ResumeDialog, SettingsPanel } from "./Settings";
 import {
   ApprovalSummary,
@@ -25,9 +26,9 @@ import { Brand, Empty, Icon, IconName, Modal, Notice, useAction } from "./ui";
 import { previewData } from "./preview";
 
 const navigation: { id: Route; title: string; icon: IconName }[] = [
-  { id: "credentials", title: "凭据与连接", icon: "vault" },
-  { id: "access", title: "AI 访问", icon: "shield" },
-  { id: "activity", title: "活动记录", icon: "activity" },
+  { id: "credentials", title: "连接", icon: "link" },
+  { id: "access", title: "AI 工具", icon: "grid" },
+  { id: "activity", title: "活动", icon: "activity" },
   { id: "settings", title: "设置", icon: "settings" },
 ];
 const preview =
@@ -51,9 +52,9 @@ export default function App() {
     ...defaultSettings,
     theme:
       preview &&
-      new URLSearchParams(window.location.search).get("theme") === "light"
-        ? "light"
-        : "dark",
+      new URLSearchParams(window.location.search).get("theme") === "dark"
+        ? "dark"
+        : "light",
   });
   const [settingsLoaded, setSettingsLoaded] = useState(preview);
   const [error, setError] = useState<string | null>(null);
@@ -550,44 +551,41 @@ function Workbench({
     });
   }
   return (
-    <div className="workbench">
+    <div className="workbench bookshelf-workbench">
       <aside className="sidebar">
         <Brand />
-        <div className="workspace-label">
-          个人工作区 <span>LOCAL</span>
-        </div>
         <nav aria-label="主导航">
-          {navigation.map((item) => (
-            <button
-              key={item.id}
-              className={`nav-item${route === item.id ? " selected" : ""}`}
-              aria-current={route === item.id ? "page" : undefined}
-              onClick={() => navigate(item.id)}
-            >
-              <Icon name={item.icon} />
-              <span>{item.title}</span>
-              {item.id === "credentials" && <small>{sites.length}</small>}
-            </button>
-          ))}
+          {navigation
+            .filter((item) => item.id !== "settings")
+            .map((item) => (
+              <button
+                key={item.id}
+                className={`nav-item${route === item.id ? " selected" : ""}`}
+                aria-current={route === item.id ? "page" : undefined}
+                onClick={() => navigate(item.id)}
+              >
+                <Icon name={item.icon} />
+                <span>{item.title}</span>
+              </button>
+            ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="local-indicator">
-            <i />
-            <span>凭据保存在本机</span>
-            <Icon name="lock" size={13} />
-          </div>
           <button
-            className="management-lock"
+            className="nav-item"
             onClick={() => void action.run(lock)}
             disabled={action.busy}
+            title="锁定管理界面，保留 AI 服务状态"
           >
             <Icon name="lock" />
-            <span>
-              <strong>锁定管理界面</strong>
-              <small>
-                {status.service_running ? "AI 继续运行" : "保留当前服务状态"}
-              </small>
-            </span>
+            <span>锁定</span>
+          </button>
+          <button
+            className={`nav-item${route === "settings" ? " selected" : ""}`}
+            aria-current={route === "settings" ? "page" : undefined}
+            onClick={() => navigate("settings")}
+          >
+            <Icon name="settings" />
+            <span>设置</span>
           </button>
           <button
             className="text-button hide-window"
@@ -624,17 +622,23 @@ function Workbench({
             </button>
           </div>
         </header>
-        <main className="main-scroll">
+        <main
+          className={`main-scroll${route === "credentials" ? " library-scroll" : ""}`}
+        >
           <div className="global-notices">
             <Notice error={statusError || loadError || action.error} />
           </div>
-          <div hidden={route !== "credentials"}>
-            <Credentials
+          <div hidden={route !== "credentials"} className="library-route">
+            <ConnectionLibrary
               sites={sites}
               harnesses={harnesses}
+              clients={clients}
+              entries={entries}
               loading={loading}
               onRefresh={refresh}
               onAuthorize={authorize}
+              onClients={() => navigate("access")}
+              onActivity={() => navigate("activity")}
             />
           </div>
           <div hidden={route !== "access"}>

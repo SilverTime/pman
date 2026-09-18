@@ -1,10 +1,9 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import {
   AuthSession,
   call,
   ConnectionCheck,
   EntryKind,
-  HarnessSummary,
   LoginCapture,
   LoginWindow,
   SiteDetails,
@@ -64,334 +63,7 @@ function parseCookies(value: string): unknown[] {
   }));
 }
 
-export function Credentials({
-  sites,
-  harnesses,
-  loading,
-  onRefresh,
-  onAuthorize,
-}: {
-  sites: SiteSummary[];
-  harnesses: HarnessSummary[];
-  loading: boolean;
-  onRefresh: () => Promise<void>;
-  onAuthorize: (site: string) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const [group, setGroup] = useState("all");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [editing, setEditing] = useState<SiteSummary | null>(null);
-  const [rotating, setRotating] = useState<SiteSummary | null>(null);
-  const [loggingIn, setLoggingIn] = useState<SiteSummary | null>(null);
-  const [deleting, setDeleting] = useState<SiteSummary | null>(null);
-  const action = useAction();
-  const searchRef = useRef<HTMLInputElement>(null);
-  const groups = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          sites
-            .map((site) => siteDetails(site).group)
-            .filter((item): item is string => Boolean(item)),
-        ),
-      ).sort(),
-    [sites],
-  );
-  const visible = sites.filter((site) => {
-    const details = siteDetails(site);
-    return (
-      (group === "all" ||
-        (group === "favorites"
-          ? details.favorite
-          : `group:${details.group}` === group)) &&
-      [
-        site.name,
-        site.alias,
-        site.site_url,
-        details.account,
-        details.environment,
-        details.tenant,
-        ...site.tags,
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(query.toLowerCase())
-    );
-  });
-  const current = visible.find((site) => site.alias === selected) || visible[0];
-  useEffect(() => {
-    const handle = (event: KeyboardEvent) => {
-      if (
-        (event.ctrlKey || event.metaKey) &&
-        event.key === "k" &&
-        !searchRef.current?.closest("[hidden]")
-      ) {
-        event.preventDefault();
-        searchRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", handle);
-    return () => window.removeEventListener("keydown", handle);
-  }, []);
-  async function updateDetails(site: SiteSummary, patch: SiteDetails) {
-    await call("site_update_metadata", {
-      alias: site.alias,
-      siteUrl: site.site_url,
-      name: site.name || null,
-      purpose: site.purpose || null,
-      tags: site.tags,
-      details: { ...siteDetails(site), ...patch },
-    });
-    await onRefresh();
-  }
-  const grantsFor = (alias: string) =>
-    harnesses.filter(
-      (harness) =>
-        !harness.revoked_at &&
-        harness.policy.allow?.some(
-          (rule) =>
-            rule.site === alias &&
-            (!rule.expires_at || Date.parse(rule.expires_at) > Date.now()),
-        ),
-    ).length;
-  return (
-    <div className="page credentials-page">
-      <div className="page-heading">
-        <div>
-          <div className="eyebrow">YOUR LOCAL VAULT</div>
-          <h1>
-            凭据与连接 <span>{sites.length}</span>
-          </h1>
-          <p>一个地方管理账号。由你决定 AI 能使用什么。</p>
-        </div>
-        <button className="button primary" onClick={() => setAdding(true)}>
-          <Icon name="plus" />
-          添加凭据
-        </button>
-      </div>
-      <div className="toolbar">
-        <label className="search-field">
-          <Icon name="search" />
-          <input
-            ref={searchRef}
-            aria-label="搜索凭据"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索账号、环境、站点…"
-          />
-          <kbd>Ctrl K</kbd>
-        </label>
-        <label className="inline-label">
-          <span className="sr-only">分组</span>
-          <select
-            value={group}
-            onChange={(event) => setGroup(event.target.value)}
-          >
-            <option value="all">全部分组</option>
-            <option value="favorites">我的收藏</option>
-            {groups.map((item) => (
-              <option key={item} value={`group:${item}`}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </label>
-        <IconButton
-          icon="refresh"
-          label="刷新凭据"
-          onClick={() => void action.run(onRefresh)}
-          disabled={loading || action.busy}
-        />
-      </div>
-      <Notice error={action.error} message={action.message} />
-      <div className={`credential-layout${current ? " with-detail" : ""}`}>
-        <section className="credential-table" aria-label="凭据列表">
-          <div className="credential-row table-header" aria-hidden="true">
-            <span />
-            <span>账号 / 名称</span>
-            <span>环境</span>
-            <span>状态</span>
-            <span>AI 授权</span>
-          </div>
-          {loading && !sites.length ? (
-            <div className="loading-state" role="status">
-              正在读取凭据…
-            </div>
-          ) : visible.length ? (
-            visible.map((site) => {
-              const details = siteDetails(site);
-              const status = statusLabel(site);
-              const grants = grantsFor(site.alias);
-              return (
-                <div
-                  className={`credential-row${current?.alias === site.alias ? " selected" : ""}`}
-                  key={site.id}
-                >
-                  <IconButton
-                    icon="star"
-                    label={
-                      details.favorite
-                        ? `取消收藏 ${site.name || site.alias}`
-                        : `收藏 ${site.name || site.alias}`
-                    }
-                    active={details.favorite}
-                    onClick={() =>
-                      void action.run(() =>
-                        updateDetails(site, { favorite: !details.favorite }),
-                      )
-                    }
-                    disabled={action.busy}
-                  />
-                  <button
-                    className="row-name"
-                    onClick={() => setSelected(site.alias)}
-                    aria-pressed={current?.alias === site.alias}
-                  >
-                    <strong>{site.name || site.alias}</strong>
-                    <small>{details.account || site.alias}</small>
-                  </button>
-                  <span className="environment">
-                    {details.environment || typeLabel(site.auth_type)}
-                  </span>
-                  <Badge tone={status.tone}>{status.text}</Badge>
-                  <span
-                    className={
-                      grants && details.ai_enabled !== false
-                        ? "grant-count"
-                        : "muted"
-                    }
-                  >
-                    {details.ai_enabled === false
-                      ? "仅本人"
-                      : grants
-                        ? `${grants} 个客户端`
-                        : "未授权"}
-                  </span>
-                </div>
-              );
-            })
-          ) : (
-            <Empty title={sites.length ? "没有匹配的凭据" : "从第一个账号开始"}>
-              {sites.length
-                ? "试试其他关键词，或切换分组。"
-                : "保存密码、接入 API 或登录网站。新凭据默认仅你本人使用。"}
-            </Empty>
-          )}
-          <footer className="table-footer">
-            <span>
-              {visible.length} 项
-              {visible.length !== sites.length
-                ? ` / 共 ${sites.length} 项`
-                : ""}
-            </span>
-            <span>
-              <Icon name="lock" size={13} />
-              本机加密保存
-            </span>
-          </footer>
-        </section>
-        {current && (
-          <CredentialDetail
-            key={current.alias}
-            site={current}
-            grants={grantsFor(current.alias)}
-            onEdit={() => setEditing(current)}
-            onRotate={() => setRotating(current)}
-            onDelete={() => setDeleting(current)}
-            onLogin={() => setLoggingIn(current)}
-            onRefresh={onRefresh}
-            onAuthorize={() => onAuthorize(current.alias)}
-            onEnable={(enabled) =>
-              updateDetails(current, { ai_enabled: enabled })
-            }
-          />
-        )}
-      </div>
-      {adding && (
-        <EntryDialog
-          onClose={() => setAdding(false)}
-          onSaved={async (input) => {
-            setAdding(false);
-            setSelected(input.alias);
-            await onRefresh();
-            if (input.auth_type === "login" || input.auth_type === "e10")
-              setLoggingIn({
-                ...input,
-                id: input.alias,
-                created_at: "",
-                updated_at: "",
-                status: "pending",
-              });
-          }}
-        />
-      )}
-      {editing && (
-        <MetadataDialog
-          site={editing}
-          onClose={() => setEditing(null)}
-          onSaved={async () => {
-            setEditing(null);
-            await onRefresh();
-          }}
-        />
-      )}
-      {rotating && (
-        <EntryDialog
-          site={rotating}
-          onClose={() => setRotating(null)}
-          onSaved={async () => {
-            setRotating(null);
-            await onRefresh();
-          }}
-        />
-      )}
-      {loggingIn && (
-        <LoginDialog
-          site={loggingIn}
-          onClose={() => setLoggingIn(null)}
-          onSaved={onRefresh}
-        />
-      )}
-      {deleting && (
-        <Modal
-          title={`删除“${deleting.name || deleting.alias}”`}
-          onClose={() => {
-            if (!action.busy) setDeleting(null);
-          }}
-        >
-          <p>将删除此凭据与连接。AI 将不能再使用这个别名；已有活动记录保留。</p>
-          <Notice error={action.error} />
-          <div className="modal-actions">
-            <button
-              className="button"
-              onClick={() => setDeleting(null)}
-              disabled={action.busy}
-            >
-              取消
-            </button>
-            <button
-              className="button danger"
-              disabled={action.busy}
-              onClick={() =>
-                void action.run(async () => {
-                  await call("site_remove", { alias: deleting.alias });
-                  setDeleting(null);
-                  setSelected(null);
-                  await onRefresh();
-                })
-              }
-            >
-              {action.busy ? "删除中…" : "删除凭据"}
-            </button>
-          </div>
-        </Modal>
-      )}
-    </div>
-  );
-}
-
-function CredentialDetail({
+export function CredentialDetail({
   site,
   grants,
   onEdit,
@@ -641,21 +313,45 @@ function CredentialDetail({
   );
 }
 
-function EntryDialog({
+function EntryFrame({
+  embedded,
+  children,
+  ...props
+}: {
+  embedded?: boolean;
+  children: ReactNode;
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+}) {
+  return embedded ? (
+    <section className="entry-inline" aria-label={props.title}>
+      {children}
+    </section>
+  ) : (
+    <Modal {...props}>{children}</Modal>
+  );
+}
+
+export function EntryDialog({
   site,
   onClose,
   onSaved,
+  embedded = false,
+  initial,
 }: {
   site?: SiteSummary;
   onClose: () => void;
   onSaved: (input: SiteInput) => Promise<void>;
+  embedded?: boolean;
+  initial?: Partial<SiteInput>;
 }) {
   const [kind, setKind] = useState<EntryKind | null>(
-    site ? (site.auth_type as EntryKind) : null,
+    site ? (site.auth_type as EntryKind) : initial?.auth_type || null,
   );
-  const [name, setName] = useState(site?.name || "");
-  const [alias, setAlias] = useState(site?.alias || "");
-  const [url, setUrl] = useState(site?.site_url || "");
+  const [name, setName] = useState(site?.name || initial?.name || "");
+  const [alias, setAlias] = useState(site?.alias || initial?.alias || "");
+  const [url, setUrl] = useState(site?.site_url || initial?.site_url || "");
   const [account, setAccount] = useState(
     site ? siteDetails(site).account || "" : "",
   );
@@ -665,7 +361,11 @@ function EntryDialog({
   const [group, setGroup] = useState("");
   const [password, setPassword] = useState("");
   const [token, setToken] = useState("");
-  const [header, setHeader] = useState("");
+  const [header, setHeader] = useState(
+    initial?.auth_type === "api_token" && initial?.name === "GitLab"
+      ? "Private-Token"
+      : "",
+  );
   const [cookies, setCookies] = useState("");
   const [visible, setVisible] = useState(false);
   const action = useAction();
@@ -721,7 +421,8 @@ function EntryDialog({
     });
   }
   return (
-    <Modal
+    <EntryFrame
+      embedded={embedded}
       title={
         site
           ? `更新“${site.name || site.alias}”的凭据`
@@ -765,7 +466,7 @@ function EntryDialog({
         <form onSubmit={save} className="stack-form">
           {!site && (
             <>
-              <div className="form-grid">
+              <div className={embedded ? "entry-name-row" : "form-grid"}>
                 <label>
                   显示名称
                   <input
@@ -775,17 +476,19 @@ function EntryDialog({
                     placeholder="例如 E10 测试环境"
                   />
                 </label>
-                <label>
-                  AI 使用的别名
-                  <input
-                    required
-                    value={alias}
-                    onChange={(event) => setAlias(event.target.value)}
-                    placeholder="例如 e10-test"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                  />
-                </label>
+                {!embedded && (
+                  <label>
+                    AI 使用的别名
+                    <input
+                      required
+                      value={alias}
+                      onChange={(event) => setAlias(event.target.value)}
+                      placeholder="例如 e10-test"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                    />
+                  </label>
+                )}
               </div>
               <label>
                 站点地址 {kind === "password" && <small>（可选）</small>}
@@ -800,6 +503,17 @@ function EntryDialog({
                 />
               </label>
             </>
+          )}
+          {kind !== "password" && kind !== "http_basic" && !site && (
+            <label>
+              账号备注 <small>（可选）</small>
+              <input
+                value={account}
+                onChange={(event) => setAccount(event.target.value)}
+                placeholder="例如：个人账号 / 工作账号"
+                autoComplete="off"
+              />
+            </label>
           )}
           {(kind === "password" || kind === "http_basic") && (
             <>
@@ -850,18 +564,20 @@ function EntryDialog({
               </div>
             </>
           )}
-          {!site && (kind === "api_token" || kind === "http_basic") && (
-            <label>
-              API 认证方式
-              <select
-                value={kind}
-                onChange={(event) => setKind(event.target.value as EntryKind)}
-              >
-                <option value="api_token">API Token</option>
-                <option value="http_basic">HTTP Basic 账号与密码</option>
-              </select>
-            </label>
-          )}
+          {!site &&
+            (!embedded || initial?.name === "通用 API") &&
+            (kind === "api_token" || kind === "http_basic") && (
+              <label>
+                API 认证方式
+                <select
+                  value={kind}
+                  onChange={(event) => setKind(event.target.value as EntryKind)}
+                >
+                  <option value="api_token">API Token</option>
+                  <option value="http_basic">HTTP Basic 账号与密码</option>
+                </select>
+              </label>
+            )}
           {kind === "api_token" && (
             <>
               <label>
@@ -875,15 +591,18 @@ function EntryDialog({
                   spellCheck={false}
                 />
               </label>
-              <label>
-                请求头名称 <small>（可选）</small>
-                <input
-                  value={header}
-                  onChange={(event) => setHeader(event.target.value)}
-                  placeholder="默认 Authorization · 可用 Private-Token"
-                  spellCheck={false}
-                />
-              </label>
+              <details className="connection-extra">
+                <summary>请求头设置（可选）</summary>
+                <label>
+                  请求头名称
+                  <input
+                    value={header}
+                    onChange={(event) => setHeader(event.target.value)}
+                    placeholder="默认 Authorization · 可用 Private-Token"
+                    spellCheck={false}
+                  />
+                </label>
+              </details>
             </>
           )}
           {kind === "cookie_jar" && (
@@ -909,31 +628,46 @@ function EntryDialog({
             </div>
           )}
           {!site && (
-            <div className="form-grid">
-              <label>
-                环境
-                <input
-                  value={environment}
-                  onChange={(event) => setEnvironment(event.target.value)}
-                  placeholder="例如 测试 / 生产"
-                />
-              </label>
-              <label>
-                分组
-                <input
-                  value={group}
-                  onChange={(event) => setGroup(event.target.value)}
-                  placeholder="例如 工作"
-                />
-              </label>
-            </div>
+            <details className="connection-extra">
+              <summary>环境、分组与高级设置</summary>
+              {embedded && (
+                <label>
+                  连接别名
+                  <input
+                    value={alias}
+                    onChange={(event) => setAlias(event.target.value)}
+                    autoCapitalize="none"
+                    spellCheck={false}
+                  />
+                  <small>已自动生成，通常无需修改。</small>
+                </label>
+              )}
+              <div className="form-grid">
+                <label>
+                  环境
+                  <input
+                    value={environment}
+                    onChange={(event) => setEnvironment(event.target.value)}
+                    placeholder="例如 测试 / 生产"
+                  />
+                </label>
+                <label>
+                  分组
+                  <input
+                    value={group}
+                    onChange={(event) => setGroup(event.target.value)}
+                    placeholder="例如 工作"
+                  />
+                </label>
+              </div>
+            </details>
           )}
           <Notice error={action.error} />
           <div className="modal-actions">
             <button
               className="button"
               type="button"
-              onClick={() => (site ? onClose() : setKind(null))}
+              onClick={() => (site || embedded ? onClose() : setKind(null))}
               disabled={action.busy}
             >
               {site ? "取消" : "返回"}
@@ -947,16 +681,18 @@ function EntryDialog({
                 ? "保存中…"
                 : kind === "login" || kind === "e10"
                   ? "保存并登录"
-                  : "保存凭据"}
+                  : embedded
+                    ? "保存并继续"
+                    : "保存凭据"}
             </button>
           </div>
         </form>
       )}
-    </Modal>
+    </EntryFrame>
   );
 }
 
-function MetadataDialog({
+export function MetadataDialog({
   site,
   onClose,
   onSaved,
@@ -1062,7 +798,10 @@ function MetadataDialog({
             placeholder="填写用途和说明，密码请保存在凭据字段中。"
           />
         </label>
-        <section className="scenario-editor" aria-labelledby="scenario-routes-title">
+        <section
+          className="scenario-editor"
+          aria-labelledby="scenario-routes-title"
+        >
           <div className="section-heading compact">
             <div>
               <strong id="scenario-routes-title">场景路由</strong>
@@ -1087,14 +826,19 @@ function MetadataDialog({
           {scenarios.length ? (
             <div className="scenario-list">
               {scenarios.map((route, index) => (
-                <article className="scenario-row" key={`${route.intent}-${index}`}>
+                <article
+                  className="scenario-row"
+                  key={`${route.intent}-${index}`}
+                >
                   <div className="form-grid">
                     <label>
                       业务意图
                       <input
                         required
                         value={route.intent}
-                        onChange={(event) => updateScenario(index, { intent: event.target.value })}
+                        onChange={(event) =>
+                          updateScenario(index, { intent: event.target.value })
+                        }
                         placeholder="jenkins.build"
                         spellCheck={false}
                       />
@@ -1104,7 +848,11 @@ function MetadataDialog({
                       <input
                         required
                         value={route.capability}
-                        onChange={(event) => updateScenario(index, { capability: event.target.value })}
+                        onChange={(event) =>
+                          updateScenario(index, {
+                            capability: event.target.value,
+                          })
+                        }
                         placeholder="jenkins.build.test"
                         spellCheck={false}
                       />
@@ -1136,7 +884,9 @@ function MetadataDialog({
                       onClick={() =>
                         setDetails((draft) => ({
                           ...draft,
-                          scenarios: (draft.scenarios || []).filter((_, routeIndex) => routeIndex !== index),
+                          scenarios: (draft.scenarios || []).filter(
+                            (_, routeIndex) => routeIndex !== index,
+                          ),
                         }))
                       }
                     >
@@ -1147,7 +897,9 @@ function MetadataDialog({
               ))}
             </div>
           ) : (
-            <p className="small-text muted">未配置时，AI 只能使用明确指定的连接别名。</p>
+            <p className="small-text muted">
+              未配置时，AI 只能使用明确指定的连接别名。
+            </p>
           )}
         </section>
         <Notice error={action.error} />

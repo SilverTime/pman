@@ -65,6 +65,7 @@ pub fn run() {
             backend::add_harness_allow_rule,
             backend::remove_harness_allow_rule,
             backend::grant_add,
+            backend::grant_connection,
             backend::list_approvals,
             backend::assistance_list,
             backend::assistance_decide,

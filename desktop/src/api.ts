@@ -2,9 +2,19 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type Route = "credentials" | "access" | "activity" | "settings";
 export type AuthType =
-  "password" | "api_token" | "http_basic" | "cookie_jar" | "login" | "e10";
+  | "password"
+  | "api_token"
+  | "http_basic"
+  | "cookie_jar"
+  | "login"
+  | "e10";
 export type EntryKind =
-  "password" | "api_token" | "http_basic" | "cookie_jar" | "login" | "e10";
+  | "password"
+  | "api_token"
+  | "http_basic"
+  | "cookie_jar"
+  | "login"
+  | "e10";
 export type VaultStatus = {
   home: string;
   initialized: boolean;
@@ -69,6 +79,7 @@ export type AllowRule = {
   paths?: string[];
   expires_at?: string;
   operation?: string;
+  require_approval?: boolean;
   capability?: string;
   constraints?: Record<string, Record<string, string[]>>;
 };
@@ -93,6 +104,7 @@ export type Client = {
   paired: boolean;
   created_at: string;
   last_used_at?: string | null;
+  expires_at?: string | null;
   revoked_at?: string | null;
 };
 export type ConfigPreview = { path: string; content: string; exists: boolean };
@@ -171,7 +183,7 @@ export type ConnectionCheck = {
 export const defaultSettings: Settings = {
   autostart: true,
   idle_lock_minutes: 15,
-  theme: "dark",
+  theme: "light",
   reduced_motion: false,
   hello_enabled: true,
 };

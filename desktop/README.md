@@ -35,6 +35,8 @@ cargo test --manifest-path src-tauri\Cargo.toml
 
 ### 只读浏览器预览
 
+新版连接书架的流程、接口与能力边界见 [实现说明](../design/pman-next/IMPLEMENTATION.md)。预览可以切换页面和填写草稿，但不会保存凭据或执行授权。
+
 ```powershell
 npm run dev
 ```
@@ -43,8 +45,8 @@ npm run dev
 
 | 参数                      | 画面                   |
 | ------------------------- | ---------------------- |
-| `?preview=1`              | 深色工作台，合成账号   |
-| `?preview=1&theme=light`  | 浅色工作台             |
+| `?preview=1`              | 浅色连接书架，合成账号 |
+| `?preview=1&theme=dark`   | 深色连接书架           |
 | `?preview=1&state=locked` | 管理界面锁定、AI 运行  |
 | `?preview=1&state=paused` | 主动暂停、等待本人恢复 |
 

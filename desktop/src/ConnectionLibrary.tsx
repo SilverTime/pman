@@ -167,6 +167,15 @@ export function ConnectionLibrary({
     });
     await onRefresh();
   }
+  async function runCheck(site: SiteSummary) {
+    await action.run(async () => {
+      const result = await call<{
+        outcome: { message: string; state: string; saved_only: boolean };
+      }>("connection_check", { alias: site.alias });
+      action.setMessage(result.outcome.message);
+      await onRefresh();
+    });
+  }
   const recent = [...sites]
     .sort((a, b) => (b.last_used_at || "").localeCompare(a.last_used_at || ""))
     .slice(0, 3);
@@ -477,7 +486,14 @@ export function ConnectionLibrary({
               </div>
             )}
             {tab === "overview" && (
-              <StatusPanel dimensions={current.dimensions} />
+              <StatusPanel
+                key={current.alias}
+                site={current}
+                dimensions={current.dimensions}
+                busy={action.busy}
+                onCheck={() => runCheck(current)}
+                onUpdateDetails={(patch) => updateDetails(current, patch)}
+              />
             )}
             {tab !== "activity" && (
               <section className="library-panel access-summary">
@@ -862,12 +878,25 @@ export function ConnectionLibrary({
 /**
  * Five-dimension status detail. Rendered from backend-computed dimensions;
  * a missing dimension always shows 尚未检查 instead of assumed health.
+ * The check action runs the native read-only check, never a webview request.
  */
 export function StatusPanel({
+  site,
   dimensions,
+  busy,
+  onCheck,
+  onUpdateDetails,
 }: {
+  site: SiteSummary;
   dimensions?: ConnectionStatus;
+  busy: boolean;
+  onCheck: () => Promise<void>;
+  onUpdateDetails: (patch: Record<string, unknown>) => Promise<void>;
 }) {
+  const details = siteDetails(site);
+  const canCheck = site.auth_type !== "password" && site.auth_type !== "e10";
+  const [provider, setProvider] = useState(details.provider || "auto");
+  const [checkPath, setCheckPath] = useState(details.check_path || "");
   return (
     <section className="library-panel status-panel" aria-label="状态明细">
       <header>
@@ -875,6 +904,16 @@ export function StatusPanel({
           <h2>状态明细</h2>
           <p>保存、验证、授权是不同的证据；未验证的维度不会标记为可用。</p>
         </div>
+        {canCheck && (
+          <button
+            className="button small"
+            disabled={busy}
+            onClick={() => void onCheck()}
+          >
+            <Icon name="refresh" size={15} />
+            {busy ? "检查中…" : "检查连接"}
+          </button>
+        )}
       </header>
       <div className="status-rows">
         {statusDimensions.map(({ key, name }) => {
@@ -901,6 +940,46 @@ export function StatusPanel({
           );
         })}
       </div>
+      {canCheck && (
+        <details className="check-settings">
+          <summary>检查设置</summary>
+          <div className="check-settings-grid">
+            <label>
+              检查方式
+              <select
+                value={provider}
+                onChange={(event) => setProvider(event.target.value)}
+              >
+                <option value="auto">自动识别（按服务地址）</option>
+                <option value="github">GitHub 身份接口</option>
+                <option value="gitlab">GitLab 身份接口</option>
+                <option value="custom">自定义只读路径</option>
+              </select>
+            </label>
+            <label>
+              只读检查路径
+              <input
+                value={checkPath}
+                placeholder="/health"
+                spellCheck={false}
+                onChange={(event) => setCheckPath(event.target.value)}
+              />
+            </label>
+          </div>
+          <button
+            className="button small"
+            disabled={busy}
+            onClick={() =>
+              void onUpdateDetails({
+                provider: provider === "auto" ? null : provider,
+                check_path: checkPath.trim() || null,
+              })
+            }
+          >
+            保存检查设置
+          </button>
+        </details>
+      )}
     </section>
   );
 }

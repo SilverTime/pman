@@ -42,6 +42,12 @@ pub struct ConnectionDetails {
     pub notes: String,
     pub ai_enabled: bool,
     pub scenarios: Vec<ScenarioRoute>,
+    /// Optional provider hint for the read-only connection check:
+    /// `github`, `gitlab` or `custom`. Absent means auto-detect by host.
+    pub provider: Option<String>,
+    /// Read-only check path for custom providers, e.g. `/api/v1/me`.
+    /// Empty/absent means an unknown service without a check path.
+    pub check_path: Option<String>,
     pub extra: Value,
 }
 

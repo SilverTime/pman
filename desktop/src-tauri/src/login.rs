@@ -24,7 +24,7 @@ fn origin(url: &str) -> Result<String, String> {
     Ok(parsed.origin().ascii_serialization())
 }
 
-fn begin_management(state: &Shared) -> Result<u64, String> {
+pub(crate) fn begin_management(state: &Shared) -> Result<u64, String> {
     let mut management = state.management.lock().map_err(|_| "管理状态不可用")?;
     management.require_authenticated()?;
     if management.persistent.service_paused {
@@ -33,7 +33,7 @@ fn begin_management(state: &Shared) -> Result<u64, String> {
     Ok(management.auth_epoch)
 }
 
-fn ensure_epoch(
+pub(crate) fn ensure_epoch(
     management: &mut crate::lifecycle::ManagementState,
     epoch: u64,
 ) -> Result<(), String> {
@@ -582,23 +582,27 @@ pub async fn e10_check(
             Ok(metadata) => {
                 ensure_account(&core.vault, &alias, &metadata)?;
                 record_metadata(&mut core.vault, &alias, &metadata)?;
+                core.vault
+                    .finish_e10_evidence(
+                        &alias,
+                        "verified",
+                        Some(&metadata.user_name),
+                        "连接正常",
+                        None,
+                    )
+                    .map_err(|_| "无法保存检查状态")?;
                 json!({"status":"connected","last_checked_at":metadata.checked_at,"account":metadata.user_name,"tenant":metadata.tenant_name,"message":"连接正常"})
             }
             Err(error) => {
                 let checked_at = chrono::Utc::now().to_rfc3339();
-                let mut extra = core
-                    .vault
-                    .details(&alias)
-                    .map_err(|_| "无法读取连接")?
-                    .extra;
-                if !extra.is_object() {
-                    extra = json!({});
-                }
-                extra["status"] = json!(error.code());
-                extra["last_checked_at"] = json!(checked_at);
-                extra["checked_at"] = json!(checked_at);
                 core.vault
-                    .update_details(&alias, json!({"extra":extra}))
+                    .finish_e10_evidence(
+                        &alias,
+                        error.code(),
+                        None,
+                        &error.to_string(),
+                        Some(error.code()),
+                    )
                     .map_err(|_| "无法保存检查状态")?;
                 json!({"status":error.code(),"last_checked_at":checked_at,"message":error.to_string()})
             }

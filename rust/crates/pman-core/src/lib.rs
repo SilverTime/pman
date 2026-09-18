@@ -3,6 +3,7 @@
 mod assistance;
 mod backup;
 mod broker;
+mod check;
 mod daemon;
 pub mod e10;
 mod http_proxy;
@@ -30,6 +31,7 @@ pub use vault::{
 };
 pub use workspace::{ClientSummary, ConnectionDetails, ScenarioMatch, ScenarioRoute};
 pub use status::{CheckEvidence, ConnectionStatus, DimensionStatus};
+pub use check::{execute_connection_check, CheckOutcome, ConnectionCheckPlan};
 
 /// Validate a request at the core boundary before any credential lookup.
 pub fn validate_http_request(request: HttpRequest) -> Result<HttpRequest, ProtocolError> {

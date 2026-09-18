@@ -61,12 +61,13 @@ pub fn execute(
     query: Option<&Value>,
     json_body: Option<&Value>,
     form: Option<&Value>,
+    timeout: Duration,
 ) -> Result<RawResponse, ProxyError> {
     let url = build_url(&site.site_url, path, query)?;
     let target = url::Url::parse(&url).map_err(|_| ProxyError::InvalidRequest)?;
     let method = Method::from_bytes(method.as_bytes()).map_err(|_| ProxyError::InvalidRequest)?;
     let client = Client::builder()
-        .timeout(Duration::from_secs(60))
+        .timeout(timeout)
         .danger_accept_invalid_certs(site.insecure_tls)
         // Never follow redirects with a credential-bearing request. Returning
         // the 3xx response is safer than accidentally leaking auth headers.
@@ -819,7 +820,7 @@ mod tests {
             site.site_url = url;
             let secret = json!({"cookies":{"_gitlab_session":"synthetic-session"}});
             let raw = execute(&site, &secret, method, "/gitlab/api/v4/projects/523/repository/commits",
-                Some(&json!({"q":"value"})), Some(&json!({"branch":"test"})), None).unwrap();
+                Some(&json!({"q":"value"})), Some(&json!({"branch":"test"})), None, Duration::from_secs(5)).unwrap();
             assert_eq!(raw.status_code, 409);
             let requests = server.join().unwrap();
             assert!(requests[0].starts_with("GET /gitlab/-/profile HTTP/1.1"));
@@ -839,7 +840,7 @@ mod tests {
             let mut site = site("login");
             site.site_url = url;
             assert!(matches!(execute(&site, &json!({"cookies":{"_gitlab_session":"synthetic-session"}}),
-                "POST", "/api/v4/projects", None, None, None), Err(ProxyError::GitlabCsrf)));
+                "POST", "/api/v4/projects", None, None, None, Duration::from_secs(5)), Err(ProxyError::GitlabCsrf)));
             assert_eq!(server.join().unwrap().len(), 1);
         }
     }
@@ -849,7 +850,7 @@ mod tests {
         let site = site("login");
         let secret = json!({"cookies":[{"name":"_gitlab_session","value":"synthetic-session",
             "path":"/api","domain":"example.test"}]});
-        assert!(matches!(execute(&site, &secret, "POST", "/api/v4/projects", None, None, None),
+        assert!(matches!(execute(&site, &secret, "POST", "/api/v4/projects", None, None, None, Duration::from_secs(5)),
             Err(ProxyError::GitlabCsrf)));
     }
 
@@ -862,7 +863,7 @@ mod tests {
             let mut site = site("cookie_jar");
             site.site_url = url;
             assert!(matches!(execute(&site, &json!({"cookies":{"_gitlab_session":"synthetic-session"}}),
-                "POST", "/api/v4/projects", None, None, None), Err(ProxyError::ResponseBlocked)));
+                "POST", "/api/v4/projects", None, None, None, Duration::from_secs(5)), Err(ProxyError::ResponseBlocked)));
             assert_eq!(server.join().unwrap().len(), 2);
         }
     }
@@ -878,7 +879,7 @@ mod tests {
             let (url, server) = csrf_server(vec!["HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".into()]);
             let mut site = site(auth);
             site.site_url = url;
-            assert_eq!(execute(&site, &secret, method, path, None, None, None).unwrap().status_code, 204);
+            assert_eq!(execute(&site, &secret, method, path, None, None, None, Duration::from_secs(5)).unwrap().status_code, 204);
             let requests = server.join().unwrap();
             assert_eq!(requests.len(), 1);
             assert!(!requests[0].to_ascii_lowercase().contains("x-csrf-token"));
@@ -1067,6 +1068,7 @@ mod tests {
             None,
             None,
             None,
+            Duration::from_secs(5),
         )
         .expect("basic request");
         execute(
@@ -1077,6 +1079,7 @@ mod tests {
             None,
             None,
             None,
+            Duration::from_secs(5),
         )
         .expect("cookie request");
         execute(
@@ -1087,6 +1090,7 @@ mod tests {
             None,
             None,
             None,
+            Duration::from_secs(5),
         )
         .expect("login request");
         thread.join().expect("server");

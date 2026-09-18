@@ -247,6 +247,7 @@ impl PreparedCall {
             self.request.query.as_ref(),
             self.request.json_body.as_ref(),
             self.request.form.as_ref(),
+            std::time::Duration::from_secs(60),
         ) {
             Ok(raw) => {
                 response_received = true;

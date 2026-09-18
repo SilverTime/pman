@@ -40,6 +40,8 @@ export type SiteDetails = {
   notes?: string;
   ai_enabled?: boolean;
   scenarios?: ScenarioRoute[];
+  provider?: string | null;
+  check_path?: string | null;
 };
 export type ScenarioRoute = {
   intent: string;

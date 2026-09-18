@@ -713,6 +713,55 @@ pub async fn broker_call(
     serde_json::to_value(result).map_err(safe_error)
 }
 
+/// Read-only connection check. Runs through the shared proxy chain (never
+/// from the webview), writes only sanitized evidence, and keeps the service
+/// lock released while the network request is in flight. This is the
+/// connection check; `client_test` is the separate AI client check.
+#[tauri::command]
+pub async fn connection_check(
+    alias: String,
+    check_path: Option<String>,
+    window: WebviewWindow,
+    state: State<'_, Shared>,
+) -> Result<Value, String> {
+    use std::time::Duration;
+    ensure_main(&window)?;
+    let auth_epoch = crate::login::begin_management(&state)?;
+    let (plan, generation) = {
+        let core = state.core.lock().map_err(|_| "服务状态不可用")?;
+        let plan = core
+            .vault
+            .prepare_connection_check(&alias, check_path.as_deref())
+            .map_err(safe_error)?;
+        (plan, core.vault.generation())
+    };
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        pman_core::execute_connection_check(&plan, Duration::from_secs(15))
+    })
+    .await
+    .map_err(|_| "连接检查失败")?;
+    ensure_main(&window)?;
+    let response = {
+        let mut management = state.management.lock().map_err(|_| "管理状态不可用")?;
+        crate::login::ensure_epoch(&mut management, auth_epoch)?;
+        let mut core = state.core.lock().map_err(|_| "服务状态不可用")?;
+        if generation != core.vault.generation() {
+            return Err("检查期间连接或授权发生变化，请重新检查".into());
+        }
+        core.vault
+            .finish_connection_check(&alias, &outcome)
+            .map_err(safe_error)?;
+        serde_json::to_value(
+            core.vault
+                .connection_status(&alias)
+                .map_err(safe_error)?,
+        )
+        .map_err(safe_error)?
+    };
+    let _ = window.app_handle().emit("connections-changed", ());
+    Ok(json!({"outcome": outcome, "dimensions": response}))
+}
+
 #[tauri::command]
 pub fn clients_list(window: WebviewWindow, state: State<Shared>) -> Result<Value, String> {
     let _guard = admin(&window, &state)?;

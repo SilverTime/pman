@@ -52,6 +52,7 @@ pub fn run() {
             backend::application_exit,
             backend::list_sites,
             backend::connection_status,
+            backend::connection_check,
             backend::site_add,
             backend::site_update_metadata,
             backend::site_rotate,

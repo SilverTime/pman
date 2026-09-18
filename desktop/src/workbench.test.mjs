@@ -128,10 +128,16 @@ test("saved credentials and paired clients are not presented as verified usage",
   assert.equal(logic.clientActive({ paired: true }), true);
 });
 
+const noop = async () => {};
+
 test("status dimensions render separate evidence and never a merged connected", async () => {
   const loaded = await load("./ConnectionLibrary.tsx");
   const html = renderToStaticMarkup(
     React.createElement(loaded.exports.StatusPanel, {
+      site: { alias: "api", auth_type: "api_token", site_url: "https://api.github.com", tags: [] },
+      busy: false,
+      onCheck: noop,
+      onUpdateDetails: noop,
       dimensions: {
         alias: "api",
         credential: {
@@ -176,10 +182,32 @@ test("status dimensions render separate evidence and never a merged connected", 
 test("missing status evidence always shows 尚未检查 instead of assumed health", async () => {
   const loaded = await load("./ConnectionLibrary.tsx");
   const empty = renderToStaticMarkup(
-    React.createElement(loaded.exports.StatusPanel, {}),
+    React.createElement(loaded.exports.StatusPanel, {
+      site: { alias: "api", auth_type: "api_token", site_url: "https://api.example.test", tags: [] },
+      busy: false,
+      onCheck: noop,
+      onUpdateDetails: noop,
+    }),
   );
   assert.match(empty, /尚未检查/);
   assert.doesNotMatch(empty, /已验证|检查通过|badge success/);
+});
+
+test("personal passwords and E10 connections never offer the generic API check", async () => {
+  const loaded = await load("./ConnectionLibrary.tsx");
+  const html = (authType) =>
+    renderToStaticMarkup(
+      React.createElement(loaded.exports.StatusPanel, {
+        site: { alias: "x", auth_type: authType, site_url: "", tags: [] },
+        busy: false,
+        onCheck: noop,
+        onUpdateDetails: noop,
+      }),
+    );
+  assert.doesNotMatch(html("password"), /检查连接/);
+  assert.doesNotMatch(html("e10"), /检查连接/);
+  assert.match(html("api_token"), /检查连接/);
+  assert.match(html("api_token"), /检查设置/);
 });
 
 test("invalid or revoked client grants stay visibly broken until repaired", async () => {

@@ -1576,6 +1576,9 @@ mod tests {
                         }
                         Err(_) => break,
                     };
+                    // Accept remains nonblocking for shutdown; each request
+                    // must wait for body fragments on the accepted socket.
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(5)))
                         .unwrap();
@@ -1587,8 +1590,17 @@ mod tests {
                             Ok(size) => size,
                         };
                         bytes.extend_from_slice(&buffer[..size]);
-                        if bytes.windows(4).any(|part| part == b"\r\n\r\n") {
-                            break;
+                        if let Some(header_end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                            let content_length = headers
+                                .lines()
+                                .filter_map(|line| line.split_once(':'))
+                                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                                .unwrap_or(0);
+                            if bytes.len() >= header_end + 4 + content_length {
+                                break;
+                            }
                         }
                     }
                     let text = String::from_utf8_lossy(&bytes).to_string();
@@ -1648,6 +1660,40 @@ mod tests {
                 let _ = thread.join();
             }
         }
+    }
+
+    #[test]
+    fn fake_provider_waits_for_fragmented_request_bodies() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let provider = FakeProvider::start(move |request| {
+            sender.send(request.clone()).unwrap();
+            FakeProvider::json_response(json!({"ok": true}))
+        });
+        let body = "client_id=fixture&scope=repo";
+        let mut stream = TcpStream::connect(&provider.address).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        write!(
+            stream,
+            "POST /token HTTP/1.1\r\nHost: localhost\r\ncOnTeNt-LeNgTh: {}\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        let middle = body.len() / 2;
+        stream.write_all(&body.as_bytes()[..middle]).unwrap();
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        stream.write_all(&body.as_bytes()[middle..]).unwrap();
+        let request = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(request, ("/token".to_owned(), body.to_owned()));
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
     }
 
     fn query_param(url: &str, name: &str) -> String {

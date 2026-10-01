@@ -1,13 +1,13 @@
 # pman · 本地 AI 连接与授权中心
 
-在 Windows 本机统一管理密码、Token、Cookie 和 E10 多环境账号。AI 通过已配对的原生 CLI / MCP 使用连接，认证由本机 Broker 注入，返回响应先脱敏。
+在 Windows 本机统一管理密码、Token、Cookie 和多环境账号。AI 通过已配对的原生 CLI / MCP 使用连接，认证由本机 Broker 注入，返回响应先脱敏。
 
 **管理界面锁定不会暂停 AI。** 关闭窗口隐藏到托盘；Windows 锁屏和系统闲置仅锁定管理界面。主动暂停或锁定保险库才停止凭据调用，且重启后仍保持暂停，直到本人验证并恢复。
 
 ## 第一次使用
 
 1. 打开 pman，创建本机保险库，或在界面中导入旧版保险库 / 加密备份。
-2. 在“连接”点击“添加连接”，选择服务并保存 API Token / HTTP Basic，或通过网站 / E10 登录账号。
+2. 在“连接”点击“添加连接”，按连接方式选择浏览器登录、访问密钥、账号密码或授权登录。
 3. 在同一流程选择可以使用此连接的 AI；尚未接入时，可直接配对 Codex、Claude Code 或通用客户端并配置 MCP。
 4. 确认整连接授权，默认持续至撤销；系统检查所选客户端的本机配对和代理服务。自定义方法、路径与有效期在“AI 工具”中设置。
 5. 在 AI 客户端重新加载配置，实际调用服务后检查结果。配置写入和本机代理检查均不代表真实业务操作已通过。普通密码仍仅供本人管理。
@@ -69,17 +69,17 @@ MCP 提供 `pm_contract`、`pm_sites`、`pm_status`、`pm_resolve_scenario`、`p
 
 场景授权可额外绑定 `capability`，并对 `query`、`form`、`json_body` 的顶层参数配置允许值或 glob。请求必须同时满足连接、方法、路径、能力 ID 和全部参数约束。未配置能力的旧授权继续兼容；配置了能力的授权不会接受未携带能力 ID 的调用。
 
-### E10 / Node SDK
+### 通用连接 / Node SDK
 
-E10 连接使用完整 origin，并固定账号和环境。支持独立 WebView2 登录；OAuth 回调必须匹配一次性事务与 `state`，不支持时使用独立窗口。PKCE 仅在服务端支持已验证时启用。会话失效需重新登录，403 和网络错误分别呈现。
+连接使用完整 origin，并固定账号和环境。支持独立 WebView2 登录；OAuth 回调必须匹配一次性事务与 `state`，不支持时使用独立窗口。PKCE 仅在服务端支持已验证时启用。会话失效需重新登录，403 和网络错误分别呈现。
 
 ```js
 import { createPmanClient } from "./sdk/node/index.mjs";
 
 const client = createPmanClient({
   clientId: process.env.PMAN_CLIENT_ID,
-  site: "e10-i18n",
-  expectedOrigin: "https://www.e-cology.com.cn",
+  site: "office-api",
+  expectedOrigin: "https://office.example.test",
 });
 const context = await client.getActiveContext(); // 非秘密元数据
 const response = await client.request({
@@ -89,7 +89,7 @@ const response = await client.request({
 });
 ```
 
-`PMAN_EXECUTABLE`、`PMAN_CLIENT_ID`、`PMAN_E10_SITE` 是非秘密配置。`.agents` 下的 `e10-i18n` 已使用此适配层，固定国际化平台 origin，失败时不读取旧 Profile / Cookie。词条确认、SQL 提交及代码替换仍遵循该 Skill 的原流程。其他尚未迁移的 Skill 保留原入口。
+`PMAN_EXECUTABLE`、`PMAN_CLIENT_ID`、`PMAN_SITE` 是非秘密配置。SDK 必须显式指定连接别名，不内置工作服务。认证流程、设备码、多步交换和旧连接转换参见 [通用认证配置](desktop/AUTHENTICATION.md)。
 
 详见 [Node SDK](sdk/node/README.md)。
 
@@ -107,28 +107,33 @@ const response = await client.request({
 
 ```powershell
 # 在 desktop 目录
-npm install
+npm ci
 cargo build --manifest-path ..\rust\Cargo.toml -p pman-cli
 npm run tauri dev
 
 # 分层检查
 npm run build
 node src/workbench.test.mjs
-cargo test --manifest-path ..\rust\Cargo.toml --workspace
-cargo test --manifest-path src-tauri\Cargo.toml
-node --test ..\sdk\node\test\*.test.mjs
+npm run test:build
+cargo test --manifest-path ..\rust\Cargo.toml --workspace --locked
+cargo test --manifest-path src-tauri\Cargo.toml --locked
+npm --prefix ..\sdk\node test
 ```
 
 前端可用显式的只读合成预览：启动 `npm run dev` 后打开 `http://127.0.0.1:1420/?preview=1`。预览操作不会连接真实保险库，也不能据此认定原生权限、登录或 Windows 生命周期验收通过。
 
 发布与设备验收见 [Windows 发布验收](desktop/RELEASE.md)，桌面命令边界见 [桌面开发说明](desktop/README.md)，新版交互与能力边界见 [连接书架实现说明](design/pman-next/IMPLEMENTATION.md)。
 
+参与开发、合成测试与 PR 要求见 [贡献指南](CONTRIBUTING.md)。SDK 声明要求 Node 18+，开发命令不会自动更换本机运行时。分层检查不代表真实设备验收或安全审计完成。
+
+[CI 定义](.github/workflows/ci.yml) 使用只读权限和固定版本，覆盖 SDK、构建脚本、前端、Windows 原生层和 Python 兼容实现；本地验证与 GitHub 在线运行分别记录，不自动发布。
+
 ## 目录
 
 ```text
 desktop/src/             React 工作台、凭据、AI 访问、活动、设置与 IPC 类型
 desktop/src-tauri/src/   管理认证、常驻生命周期、登录、配置和迁移
-rust/crates/pman-core/   Vault、Broker、策略、DPAPI/命名管道、E10 provider
+rust/crates/pman-core/   Vault、Broker、策略、DPAPI/命名管道、通用认证引擎
 rust/crates/pman-cli/    原生 CLI / stdio MCP 桥接
 rust/crates/pman-protocol/  pman/2 协议类型
 sdk/node/               无秘密的 Node 请求适配层

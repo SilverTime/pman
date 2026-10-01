@@ -239,7 +239,10 @@ fn same_display_name_with_different_uuids_keeps_identities_separate() {
         operation: "status".into(),
         args: json!({}),
     });
-    assert_eq!(forged["error_code"], "harness_invalid", "同名不同 UUID 不得串用身份");
+    assert_eq!(
+        forged["error_code"], "harness_invalid",
+        "同名不同 UUID 不得串用身份"
+    );
     assert_eq!(
         shared
             .core
@@ -254,6 +257,82 @@ fn same_display_name_with_different_uuids_keeps_identities_separate() {
         2,
         "两个同名客户端是独立的配对记录"
     );
+}
+
+/// T07 native-chain acceptance: synthetic connection -> pairing -> whole-
+/// connection grant -> real proxied read -> revoke -> same identity rejected.
+#[test]
+fn full_chain_pair_grant_real_call_revoke_reject() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut accepted = 0;
+        while accepted < 1 && Instant::now() < deadline {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut bytes = [0u8; 8192];
+            let size = stream.read(&mut bytes).unwrap();
+            let text = String::from_utf8_lossy(&bytes[..size]);
+            assert!(text.contains("SYNTHETIC_PMAN_NEVER_OUTPUT_92745"));
+            assert!(text.to_ascii_lowercase().starts_with("get"));
+            let body = r#"{"ready":true,"identity":"synthetic"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: {}
+Connection: close
+
+{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            accepted += 1;
+        }
+        accepted
+    });
+    let (_dir, shared) = fixture(&origin);
+    {
+        // Whole-connection grant through the consent command's core path.
+        let mut core = shared.core.lock().unwrap();
+        core.vault
+            .grant_connection_clients("fixture", &["test-pair".into()])
+            .unwrap();
+    }
+    // A real proxied read through the paired identity (named pipe protocol)
+    // succeeds.
+    let call = |client_id: &str, proof: &str| {
+        shared.dispatch(IpcRequest {
+            client_id: client_id.into(),
+            proof: proof.into(),
+            operation: "http".into(),
+            args: json!({"request": {"site": "fixture", "method": "GET", "path": "/query"}}),
+        })
+    };
+    let ok = call("test-pair", PROOF);
+    assert_eq!(ok["ok"], true, "authorized real call failed: {ok}");
+    assert_eq!(ok["status_code"], 200);
+    // Revoke the client pairing.
+    shared
+        .core
+        .lock()
+        .unwrap()
+        .vault
+        .revoke_client("test-pair")
+        .unwrap();
+    // The same identity is rejected immediately afterwards, before any
+    // credential lookup or dispatch.
+    let rejected = call("test-pair", PROOF);
+    assert_eq!(rejected["error_code"], "harness_invalid");
+    assert_eq!(status(&shared)["error_code"], "harness_invalid");
+    drop(server);
 }
 
 #[test]
@@ -329,7 +408,8 @@ fn browser_actions_fail_closed_before_touching_any_webview() {
             .query_audit(Some("test-client"), 100)
             .unwrap()
             .iter()
-            .filter(|entry| entry.method.as_deref() == Some("WEB:open") && entry.status_code == Some(200))
+            .filter(|entry| entry.method.as_deref() == Some("WEB:open")
+                && entry.status_code == Some(200))
             .count(),
         0
     );

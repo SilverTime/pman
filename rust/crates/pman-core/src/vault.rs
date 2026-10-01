@@ -33,6 +33,7 @@ pub const AUTH_TYPES: &[&str] = &[
     "cookie_jar",
     "login",
     "password",
+    "authflow",
     "e10",
 ];
 
@@ -569,6 +570,37 @@ impl Vault {
             }
         }
         self.update_secret(alias, current)
+    }
+
+    /// Human-managed reconfiguration, including retired connection types.
+    /// Keeps existing credentials and account binding, and invalidates old evidence.
+    pub fn configure_authentication(&mut self, alias: &str, auth_type: &str, profile: Value) -> Result<(), VaultError> {
+        if !AUTH_TYPES.contains(&auth_type) || auth_type == "password" {
+            return Err(VaultError::UnsupportedAuthType(auth_type.into()));
+        }
+        let site = self.list_sites()?.into_iter().find(|s| s.alias == alias).ok_or_else(||VaultError::UnknownSite(alias.into()))?;
+        if site.auth_type == "password" { return Err(VaultError::InvalidSchema("Personal passwords cannot be converted into AI connections".into())); }
+        let mut secret = self.get_site_secret(alias)?;
+        let origin = url::Url::parse(&site.site_url).map_err(|_|VaultError::InvalidSecret)?.origin().ascii_serialization();
+        secret["auth_profile"] = profile;
+        secret["origin"] = serde_json::json!(origin);
+        let config = crate::authflow::profile(&secret).map_err(|e|VaultError::InvalidSchema(e.to_string()))?;
+        if auth_type == "authflow" && (config.authorization.is_none() || config.check.is_none()) {
+            return Err(VaultError::InvalidSchema("Authorization and identity check are required".into()));
+        }
+        self.conn.execute_batch("SAVEPOINT configure_auth")?;
+        let outcome = (|| {
+            self.update_secret(alias, secret)?;
+            self.conn.execute("UPDATE sites SET auth_type=? WHERE alias=?",params![auth_type,alias])?;
+            let mut details=self.details(alias)?;
+            if !details.extra.is_object() { details.extra=serde_json::json!({}); }
+            details.extra["configured_auth"]=serde_json::json!(true);
+            details.extra["has_identity_check"]=serde_json::json!(config.check.is_some());
+            details.extra["has_refresh"]=serde_json::json!(!config.refresh.is_empty());
+            self.update_details(alias,serde_json::json!({"extra":details.extra}))?;
+            Ok::<(),VaultError>(())
+        })();
+        match outcome { Ok(())=>{self.conn.execute_batch("RELEASE configure_auth")?;Ok(())}, Err(e)=>{self.conn.execute_batch("ROLLBACK TO configure_auth; RELEASE configure_auth")?;Err(e)} }
     }
 
     pub fn update_site_metadata(
@@ -1398,10 +1430,17 @@ fn validate_site_input(input: &SiteInput) -> Result<(), VaultError> {
     if !AUTH_TYPES.contains(&input.auth_type.as_str()) {
         return Err(VaultError::UnsupportedAuthType(input.auth_type.clone()));
     }
+    if input.auth_type == "authflow" {
+        let config = crate::authflow::profile(&input.secret).map_err(|e|VaultError::InvalidSchema(e.to_string()))?;
+        if config.authorization.is_none() || config.check.is_none() { return Err(VaultError::InvalidSchema("Authorization and identity check are required".into())); }
+    }
     validate_secret(&input.secret)
 }
 
 fn validate_secret(secret: &Value) -> Result<(), VaultError> {
+    if secret.get("auth_profile").is_some() {
+        crate::authflow::profile(secret).map_err(|e| VaultError::InvalidSchema(e.to_string()))?;
+    }
     match secret {
         Value::Object(map) if !map.is_empty() => Ok(()),
         _ => Err(VaultError::InvalidSecret),
@@ -1724,5 +1763,24 @@ mod tests {
             )
             .expect("release fingerprint");
         assert_ne!(build, release);
+    }
+}
+
+#[cfg(test)]
+mod authentication_configuration_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn reconfiguration_preserves_credentials_and_binding_but_clears_evidence() {
+        let dir=tempfile::tempdir().unwrap();let mut vault=Vault::open(dir.path()).unwrap();vault.create("synthetic-master").unwrap();
+        vault.add_site(SiteInput::new("office","https://office.test","login",json!({"cookies":{"SESSION":"synthetic-cookie"},"account_id":"account-bound"}))).unwrap();
+        vault.update_details("office",json!({"extra":{"status":"connected","checked_at":"2026-09-20T00:00:00"}})).unwrap();
+        // A retired type is ordinary existing data; no product-specific migration is needed.
+        vault.conn.execute("UPDATE sites SET auth_type='retired-provider' WHERE alias='office'",[]).unwrap();
+        vault.configure_authentication("office","login",json!({"headers":{"X-Session":"${cookie:SESSION}"}})).unwrap();
+        let secret=vault.get_site_secret("office").unwrap();assert_eq!(secret["cookies"]["SESSION"],"synthetic-cookie");assert_eq!(secret["account_id"],"account-bound");
+        assert_eq!(vault.list_sites().unwrap()[0].auth_type,"login");assert!(vault.details("office").unwrap().extra.get("status").is_none());
+        let before=secret.clone();assert!(vault.configure_authentication("office","authflow",json!({})).is_err());assert_eq!(vault.get_site_secret("office").unwrap(),before);
+        assert_eq!(vault.list_sites().unwrap()[0].auth_type,"login");
     }
 }

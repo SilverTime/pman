@@ -134,7 +134,12 @@ test("status dimensions render separate evidence and never a merged connected", 
   const loaded = await load("./ConnectionLibrary.tsx");
   const html = renderToStaticMarkup(
     React.createElement(loaded.exports.StatusPanel, {
-      site: { alias: "api", auth_type: "api_token", site_url: "https://api.github.com", tags: [] },
+      site: {
+        alias: "api",
+        auth_type: "api_token",
+        site_url: "https://api.github.com",
+        tags: [],
+      },
       busy: false,
       onCheck: noop,
       onUpdateDetails: noop,
@@ -183,7 +188,12 @@ test("missing status evidence always shows 尚未检查 instead of assumed healt
   const loaded = await load("./ConnectionLibrary.tsx");
   const empty = renderToStaticMarkup(
     React.createElement(loaded.exports.StatusPanel, {
-      site: { alias: "api", auth_type: "api_token", site_url: "https://api.example.test", tags: [] },
+      site: {
+        alias: "api",
+        auth_type: "api_token",
+        site_url: "https://api.example.test",
+        tags: [],
+      },
       busy: false,
       onCheck: noop,
       onUpdateDetails: noop,
@@ -193,7 +203,7 @@ test("missing status evidence always shows 尚未检查 instead of assumed healt
   assert.doesNotMatch(empty, /已验证|检查通过|badge success/);
 });
 
-test("personal passwords and E10 connections never offer the generic API check", async () => {
+test("status settings stay hidden for personal passwords and available for generic connections", async () => {
   const loaded = await load("./ConnectionLibrary.tsx");
   const html = (authType) =>
     renderToStaticMarkup(
@@ -205,8 +215,10 @@ test("personal passwords and E10 connections never offer the generic API check",
       }),
     );
   assert.doesNotMatch(html("password"), /检查连接/);
-  assert.doesNotMatch(html("e10"), /检查连接/);
-  assert.match(html("api_token"), /检查连接/);
+  assert.doesNotMatch(html("authflow"), /检查连接/);
+  assert.doesNotMatch(html("api_token"), /检查连接/);
+  assert.doesNotMatch(html("password"), /检查与 OAuth 设置/);
+  assert.match(html("authflow"), /检查与 OAuth 设置/);
   assert.match(html("api_token"), /检查与 OAuth 设置/);
 });
 
@@ -328,15 +340,15 @@ test("login state does not falsely label stored tokens as connected", async () =
   );
   assert.equal(status({ auth_type: "login", status: "active" }).text, "待检查");
   assert.equal(
-    status({ auth_type: "e10", status: "connected" }).text,
+    status({ auth_type: "authflow", status: "connected" }).text,
     "已连接",
   );
   assert.equal(
-    status({ auth_type: "e10", status: "forbidden" }).text,
+    status({ auth_type: "authflow", status: "forbidden" }).text,
     "权限不足",
   );
   assert.equal(
-    status({ auth_type: "e10", status: "network_error" }).text,
+    status({ auth_type: "authflow", status: "network_error" }).text,
     "网络异常",
   );
   assert.equal(
@@ -373,11 +385,15 @@ test("oauth login presents real flows and never fakes success", async () => {
   assert.match(source, /等待提供方确认授权/);
   assert.match(source, /oauth_complete/);
   assert.match(source, /oauth_cancel/);
-  // The wizard discloses that OAuth needs a registered client_id and the
-  // Token path stays available; unconfigured connections show no login button.
-  assert.match(source, /需要在 \{template\.title\}/);
+  const { exports: credentials } = await load("./Credentials.tsx");
+  const form = renderToStaticMarkup(React.createElement(credentials.EntryDialog, {
+    embedded: true, initial: {auth_type: "authflow"}, onClose() {}, async onSaved() {},
+  }));
+  assert.match(form, /授权码 \+ PKCE/);
+  assert.match(form, /设备码/);
+  assert.match(form, /高级认证配置/);
+  assert.match(form, /身份检查路径/);
   assert.match(source, /oauth_client_id && \(/);
-  assert.match(source, /未配置时继续使用 Token/);
   const { exports: logic } = await load("./connections.ts");
   assert.equal(
     logic.connectionProvider({

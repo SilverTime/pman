@@ -141,18 +141,15 @@ pub fn dispatch_metadata(vault: &crate::Vault, request: &IpcRequest, harness: &s
                 .collect();
             // This timestamp covers identity verification (including this
             // handshake); real business usage is audit-log evidence only.
-            let identity_last_used = vault
-                .list_clients()
-                .ok()
-                .and_then(|clients| {
-                    clients
-                        .iter()
-                        .filter(|c| c.harness == harness)
-                        .filter_map(|c| c.last_used_at.clone())
-                        .max()
-                });
+            let identity_last_used = vault.list_clients().ok().and_then(|clients| {
+                clients
+                    .iter()
+                    .filter(|c| c.harness == harness)
+                    .filter_map(|c| c.last_used_at.clone())
+                    .max()
+            });
             result_ok(
-                json!({"handshake":"pman/2","harness":harness,"capabilities":["http","sites","resolve_scenario","approval"],"connections":connections,"identity_last_used_at":identity_last_used}),
+                json!({"handshake":"pman/2","harness":harness,"capabilities":["http","sites","resolve_scenario","approval","browser"],"connections":connections,"identity_last_used_at":identity_last_used}),
             )
         }
         "status" => result_ok(
@@ -696,7 +693,7 @@ mod tests {
     use super::*;
     #[test]
     fn alias_roundtrip_handles_chinese() {
-        let alias = "E10 开发环境";
+        let alias = "Connection 开发环境";
         assert_eq!(resolve_alias(&alias_ref(alias)), alias);
     }
     #[test]

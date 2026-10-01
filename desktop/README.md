@@ -4,7 +4,7 @@ Tauri 2 + React 17 + TypeScript，单一 Rust Broker 管理本机保险库、客
 
 ## 页面与工作流
 
-- **凭据与连接**：48px 账号行，名称 / 账号 / 环境 / 状态 / AI 授权同屏；搜索、分组、收藏、右侧详情。支持密码、API Token、HTTP Basic、Cookie、WebView2 与 E10 登录。
+- **凭据与连接**：48px 账号行，名称 / 账号 / 环境 / 状态 / AI 授权同屏；搜索、分组、收藏、右侧详情。支持密码、API Token、HTTP Basic、Cookie、WebView2 与 通用连接 登录。
 - **AI 访问**：配对 → 场景路由 → 业务能力与参数约束 → 配置预览 / 写入 / 恢复 / 连通性检查。新客户端使用独立 harness，持续授权或自定义到期时间。场景只解析固定连接与账号；多条命中必须补充上下文。高级策略保留明确拒绝及旧版策略编辑。
 - **活动**：按客户端、连接、结果筛选；展开响应统计和说明，可定位对应授权。
 - **设置**：开机启动、闲置管理锁、Hello、深浅主题、减少动效、加密备份、迁移及旧版 HTTP 兼容入口。
@@ -78,11 +78,11 @@ npm run dev
 - 配对：`client_pair`、`clients_list`、`client_revoke`，配置 `client_config_preview/apply/restore`、`client_test`。配对返回元数据和 ID，不返回秘密。
 - 授权：`grant_add({harness,site,method,path,operation,capability?,constraints?,expiresAt?})`；连接详情的 `scenarios` 保存业务意图、能力 ID、服务匹配和附加条件；保留 harness 策略、一次性审批和审计命令。
 - 协助：`assistance_list({status:'pending'})`、`assistance_decide({id,status:'handled'|'cancelled'})`。完成实际登录 / 授权后才标记 handled；标记状态本身不赋予权限。
-- 登录：`open_login_window` / `login_capture_cookies` / `close_login_window`；E10 `e10_begin` 后立即等待 `e10_complete`，等待期间可 `e10_cancel`；`e10_check` 检查身份。
+- 登录：`open_login_window` / `login_capture_cookies` / `close_login_window`；通用连接 `authflow_begin` 后立即等待 `authflow_complete`，等待期间可 `authflow_cancel`；`authflow_check` 检查身份。
 - 数据：`vault_backup`、`vault_import({password,sourcePath?})`、`vault_migrate_legacy({password,sourcePath?})`。省略路径时打开原生文件对话框。
 
 前端监听 `management-locked`、`service-changed`、`approvals-changed`。管理锁定立即卸载工作台，并丢弃锁定之前发起的过时状态响应；2 秒状态轮询作为补充。4 秒元数据刷新保留编辑中的草稿。
 
 ## 验收边界
 
-前端构建和只读浏览器预览只能验证界面、类型和交互。真实 Windows Hello、Windows 锁屏 / 睡眠 / 开机恢复、真实 E10 登录、MCP 客户端加载和干净设备安装需按照 [RELEASE.md](RELEASE.md) 单独完成。
+前端构建和只读浏览器预览只能验证界面、类型和交互。真实 Windows Hello、Windows 锁屏 / 睡眠 / 开机恢复、真实 通用连接 登录、MCP 客户端加载和干净设备安装需按照 [RELEASE.md](RELEASE.md) 单独完成。

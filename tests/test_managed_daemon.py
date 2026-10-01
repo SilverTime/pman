@@ -80,10 +80,22 @@ class ManagedDaemonIntegrationTest(unittest.TestCase):
                 self.assertEqual(status["protocol"], "pman")
                 self.assertEqual(status["protocol_version"], 2)
             finally:
-                if process.poll() is None:
-                    process.terminate()
-                process.wait(timeout=5)
-                process.stderr.close()
+                try:
+                    if process.poll() is None:
+                        if os.name == "nt":
+                            # Windows virtualenv launchers can own a separate
+                            # interpreter process. Stop only this test's tree.
+                            subprocess.run(
+                                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE,
+                                check=True,
+                            )
+                        else:
+                            process.terminate()
+                    process.wait(timeout=5)
+                finally:
+                    process.stderr.close()
 
 
 if __name__ == "__main__":

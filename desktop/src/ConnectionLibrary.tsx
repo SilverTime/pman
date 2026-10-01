@@ -5,6 +5,7 @@ import {
   EntryDialog,
   LoginDialog,
   MetadataDialog,
+  OAuthPresetDialog,
 } from "./Credentials";
 import {
   AuditEntry,
@@ -51,9 +52,7 @@ export function ServiceMark({ name, kind }: { name: string; kind?: string }) {
           ? "C"
           : key.includes("claude")
             ? "Cl"
-            : key.includes("e10")
-              ? "E10"
-              : key.includes("openai")
+            : key.includes("openai")
                 ? "AI"
                 : "";
   return (
@@ -61,7 +60,7 @@ export function ServiceMark({ name, kind }: { name: string; kind?: string }) {
       className={`service-mark${label ? ` mark-${label.toLowerCase().replace(/[^a-z0-9]/g, "claude")}` : ""}`}
       aria-hidden="true"
     >
-      {label || <Icon name={kind === "password" ? "key" : "globe"} size={22} />}
+      {label || <Icon name={kind === "password" || kind === "api_token" ? "key" : kind === "http_basic" ? "shield" : "globe"} size={22} />}
     </span>
   );
 }
@@ -98,6 +97,7 @@ export function ConnectionLibrary({
   const [editing, setEditing] = useState<SiteSummary | null>(null);
   const [loggingIn, setLoggingIn] = useState<SiteSummary | null>(null);
   const [managing, setManaging] = useState<SiteSummary | null>(null);
+  const [authConfig, setAuthConfig] = useState<SiteSummary | null>(null);
   const [rotating, setRotating] = useState<SiteSummary | null>(null);
   const [deleting, setDeleting] = useState<SiteSummary | null>(null);
   const [oauthFlow, setOauthFlow] = useState<SiteSummary | null>(null);
@@ -187,13 +187,23 @@ export function ConnectionLibrary({
   const grants = current ? connectionGrants(current, harnesses) : [];
   const activeClients = clients.filter(clientActive);
   const isPersonal = current ? current.auth_type === "password" : false;
-  const webEnabled = current ? Boolean(siteDetails(current).web_enabled) : false;
+  const webEnabled = current
+    ? Boolean(siteDetails(current).web_enabled)
+    : false;
   const webDim = current?.dimensions?.web;
-  const webOrigin = current ? connectionHost(current) : "";
+  const webOrigin = (() => {
+    try {
+      return current ? new URL(current.site_url).origin : "";
+    } catch {
+      return "";
+    }
+  })();
   const webGrantedClients = current
     ? harnesses
         .filter((harness) =>
-          (harness.policy.web || []).some((rule) => rule.site === current.alias),
+          (harness.policy.web || []).some(
+            (rule) => rule.site === current.alias,
+          ),
         )
         .flatMap((harness) =>
           activeClients
@@ -451,7 +461,7 @@ export function ConnectionLibrary({
                     {connectionAbility(current).detail}
                   </p>
                   <div className="button-row">
-                    {["login", "e10"].includes(current.auth_type) ? (
+                    {["login", "authflow", "e10"].includes(current.auth_type) ? (
                       <button
                         className="button small"
                         onClick={() => setLoggingIn(current)}
@@ -467,57 +477,53 @@ export function ConnectionLibrary({
                         更新凭据
                       </button>
                     )}
-                    {current.auth_type === "e10" && (
+                    {current.auth_type !== "password" && <>
+                      <button className="button small" disabled={action.busy} onClick={() => void runCheck(current)}>检查连接</button>
+                      <button className="button small" onClick={() => setAuthConfig(current)}>认证配置</button>
+                      {siteDetails(current).extra?.has_refresh === true && <button className="button small" disabled={action.busy} onClick={() => void action.run(async () => { await call("authflow_refresh", { alias: current.alias }); action.setMessage("凭据已刷新"); await onRefresh(); })}>刷新凭据</button>}
+                    </>}
+                    {(current.auth_type === "e10"
+                      ? connectionProvider(current) === "e10"
+                      : !["login", "authflow", "e10", "cookie_jar", "password"].includes(
+                          current.auth_type,
+                        ) &&
+                        connectionProvider(current) &&
+                        siteDetails(current).oauth_client_id) && (
                       <button
                         className="button small"
                         disabled={action.busy}
-                        onClick={() =>
-                          void action.run(async () => {
-                            const result = await call<ConnectionCheck>(
-                              "e10_check",
-                              { alias: current.alias },
-                            );
-                            action.setMessage(
-                              result.message || `连接状态：${result.status}`,
-                            );
-                            await onRefresh();
-                          })
-                        }
+                        onClick={() => setOauthFlow(current)}
                       >
-                        检查连接
+                        <Icon name="globe" size={15} />
+                        OAuth 登录
                       </button>
                     )}
-                    {!["login", "e10", "cookie_jar", "password"].includes(
+                  </div>
+                  {!["login", "authflow", "e10", "cookie_jar", "password"].includes(
                       current.auth_type,
                     ) &&
-                      connectionProvider(current) &&
-                      siteDetails(current).oauth_client_id && (
-                        <button
-                          className="button small"
-                          disabled={action.busy}
-                          onClick={() => setOauthFlow(current)}
-                        >
-                          <Icon name="globe" size={15} />
-                          OAuth 登录
-                        </button>
-                      )}
-                  </div>
-                  {!["login", "e10", "cookie_jar", "password"].includes(
-                    current.auth_type,
-                  ) &&
                     connectionProvider(current) &&
                     !siteDetails(current).oauth_client_id && (
                       <p className="panel-hint">
-                        OAuth 免密登录（无需 client
-                        secret）可用：在“检查与 OAuth 设置”中保存应用 client_id
+                        OAuth 免密登录（无需 client secret）可用：在“检查与
+                        OAuth 设置”中保存应用 client_id
                         后，这里会出现登录入口。也可以继续使用 Token。
+                      </p>
+                    )}
+                  {current.auth_type === "e10" &&
+                    connectionProvider(current) === "e10" && (
+                      <p className="panel-hint">
+                        E10 浏览器授权（OAuth）可用；平台未回传 state
+                        时会提示改用本页的独立登录窗口。
                       </p>
                     )}
                 </section>
                 <section className="library-panel">
                   <header>
                     <h2>网页操作</h2>
-                    <Badge tone={dimensionTone(webDim?.state || "not_available")}>
+                    <Badge
+                      tone={dimensionTone(webDim?.state || "not_available")}
+                    >
                       {webDim?.label || "尚未开启"}
                     </Badge>
                   </header>
@@ -637,16 +643,6 @@ export function ConnectionLibrary({
                 </section>
               </div>
             )}
-            {tab === "overview" && (
-              <StatusPanel
-                key={current.alias}
-                site={current}
-                dimensions={current.dimensions}
-                busy={action.busy}
-                onCheck={() => runCheck(current)}
-                onUpdateDetails={(patch) => updateDetails(current, patch)}
-              />
-            )}
             {tab !== "activity" && (
               <section className="library-panel access-summary">
                 <header>
@@ -733,6 +729,16 @@ export function ConnectionLibrary({
                   AI 通过 pman 使用账号，不会获得密码或令牌。
                 </div>
               </section>
+            )}
+            {tab === "overview" && (
+              <StatusPanel
+                key={current.alias}
+                site={current}
+                dimensions={current.dimensions}
+                busy={action.busy}
+                onCheck={() => runCheck(current)}
+                onUpdateDetails={(patch) => updateDetails(current, patch)}
+              />
             )}
             {tab !== "access" && (
               <section className="library-panel">
@@ -945,6 +951,7 @@ export function ConnectionLibrary({
           onSaved={onRefresh}
         />
       )}
+      {authConfig && <AuthenticationConfigDialog site={authConfig} onClose={() => setAuthConfig(null)} onSaved={async () => { setAuthConfig(null); await onRefresh(); }} />}
       {rotating && (
         <EntryDialog
           site={rotating}
@@ -1047,7 +1054,6 @@ export function StatusPanel({
   site,
   dimensions,
   busy,
-  onCheck,
   onUpdateDetails,
 }: {
   site: SiteSummary;
@@ -1057,120 +1063,130 @@ export function StatusPanel({
   onUpdateDetails: (patch: Record<string, unknown>) => Promise<void>;
 }) {
   const details = siteDetails(site);
-  const canCheck = site.auth_type !== "password" && site.auth_type !== "e10";
+  const canCheck = site.auth_type !== "password";
   const [provider, setProvider] = useState(details.provider || "auto");
   const [checkPath, setCheckPath] = useState(details.check_path || "");
   const [oauthClientId, setOauthClientId] = useState(
     details.oauth_client_id || "",
   );
   const [oauthScope, setOauthScope] = useState(details.oauth_scope || "");
+  const [oauthTenant, setOauthTenant] = useState(details.oauth_tenant || "");
   return (
     <section className="library-panel status-panel" aria-label="状态明细">
-      <header>
-        <div>
-          <h2>状态明细</h2>
-          <p>保存、验证、授权是不同的证据；未验证的维度不会标记为可用。</p>
+      <details className="status-disclosure">
+        <summary>
+          <span>
+            <strong>查看状态证据</strong>
+            <small>保存、验证、授权与真实调用分别记录</small>
+          </span>
+          <Icon name="chevron" size={15} />
+        </summary>
+        <div className="status-rows">
+          {statusDimensions.map(({ key, name }) => {
+            const info = dimensionSummary(dimensions?.[key]);
+            return (
+              <div className="status-row" key={key}>
+                <span className="status-name">{name}</span>
+                <Badge tone={info.tone}>{info.label}</Badge>
+                <div className="status-text">
+                  <p>{info.detail}</p>
+                  <small>
+                    {info.checked_at
+                      ? `检查于 ${timestamp(info.checked_at)}`
+                      : "尚未检查"}
+                    {info.error_code
+                      ? ` · ${errorCodeInfo(info.error_code).text}`
+                      : ""}
+                  </small>
+                </div>
+                {info.recovery && (
+                  <span className="status-recovery">{info.recovery}</span>
+                )}
+              </div>
+            );
+          })}
         </div>
         {canCheck && (
-          <button
-            className="button small"
-            disabled={busy}
-            onClick={() => void onCheck()}
-          >
-            <Icon name="refresh" size={15} />
-            {busy ? "检查中…" : "检查连接"}
-          </button>
-        )}
-      </header>
-      <div className="status-rows">
-        {statusDimensions.map(({ key, name }) => {
-          const info = dimensionSummary(dimensions?.[key]);
-          return (
-            <div className="status-row" key={key}>
-              <span className="status-name">{name}</span>
-              <Badge tone={info.tone}>{info.label}</Badge>
-              <div className="status-text">
-                <p>{info.detail}</p>
-                <small>
-                  {info.checked_at
-                    ? `检查于 ${timestamp(info.checked_at)}`
-                    : "尚未检查"}
-                  {info.error_code
-                    ? ` · ${errorCodeInfo(info.error_code).text}`
-                    : ""}
-                </small>
-              </div>
-              {info.recovery && (
-                <span className="status-recovery">{info.recovery}</span>
+          <details className="check-settings">
+            <summary>检查与 OAuth 设置</summary>
+            <div className="check-settings-grid">
+              <label>
+                检查方式
+                <select
+                  value={provider}
+                  onChange={(event) => setProvider(event.target.value)}
+                >
+                  <option value="auto">自动识别（按服务地址）</option>
+                  <option value="github">GitHub 身份接口</option>
+                  <option value="gitlab">GitLab 身份接口</option>
+                  <option value="gitee">Gitee 身份接口（令牌）</option>
+                  <option value="microsoft">Microsoft 身份接口</option>
+                  <option value="google">Google 身份接口</option>
+                  <option value="custom">自定义只读路径</option>
+                </select>
+              </label>
+              <label>
+                只读检查路径
+                <input
+                  value={checkPath}
+                  placeholder="/health"
+                  spellCheck={false}
+                  onChange={(event) => setCheckPath(event.target.value)}
+                />
+              </label>
+              <label>
+                OAuth 应用 client_id
+                <input
+                  value={oauthClientId}
+                  placeholder="在提供方注册的公开应用 ID（E10 无需填写）"
+                  spellCheck={false}
+                  onChange={(event) => setOauthClientId(event.target.value)}
+                />
+              </label>
+              <label>
+                OAuth scope
+                <input
+                  value={oauthScope}
+                  placeholder="留空使用最小只读范围"
+                  spellCheck={false}
+                  onChange={(event) => setOauthScope(event.target.value)}
+                />
+              </label>
+              {provider === "microsoft" && (
+                <label>
+                  Microsoft tenant
+                  <input
+                    value={oauthTenant}
+                    placeholder="organizations（默认）/ consumers / common / 租户 ID"
+                    spellCheck={false}
+                    onChange={(event) => setOauthTenant(event.target.value)}
+                  />
+                </label>
               )}
             </div>
-          );
-        })}
-      </div>
-      {canCheck && (
-        <details className="check-settings">
-          <summary>检查与 OAuth 设置</summary>
-          <div className="check-settings-grid">
-            <label>
-              检查方式
-              <select
-                value={provider}
-                onChange={(event) => setProvider(event.target.value)}
-              >
-                <option value="auto">自动识别（按服务地址）</option>
-                <option value="github">GitHub 身份接口</option>
-                <option value="gitlab">GitLab 身份接口</option>
-                <option value="custom">自定义只读路径</option>
-              </select>
-            </label>
-            <label>
-              只读检查路径
-              <input
-                value={checkPath}
-                placeholder="/health"
-                spellCheck={false}
-                onChange={(event) => setCheckPath(event.target.value)}
-              />
-            </label>
-            <label>
-              OAuth 应用 client_id
-              <input
-                value={oauthClientId}
-                placeholder="在 GitHub / GitLab 注册的公开应用 ID"
-                spellCheck={false}
-                onChange={(event) => setOauthClientId(event.target.value)}
-              />
-            </label>
-            <label>
-              OAuth scope
-              <input
-                value={oauthScope}
-                placeholder="留空使用最小只读范围"
-                spellCheck={false}
-                onChange={(event) => setOauthScope(event.target.value)}
-              />
-            </label>
-          </div>
-          <p className="panel-hint">
-            OAuth 只支持无需 client secret 的官方流程（GitLab PKCE / GitHub
-            设备码）；令牌只保存在本机保险库。
-          </p>
-          <button
-            className="button small"
-            disabled={busy}
-            onClick={() =>
-              void onUpdateDetails({
-                provider: provider === "auto" ? null : provider,
-                check_path: checkPath.trim() || null,
-                oauth_client_id: oauthClientId.trim() || null,
-                oauth_scope: oauthScope.trim() || null,
-              })
-            }
-          >
-            保存设置
-          </button>
-        </details>
-      )}
+            <p className="panel-hint">
+              OAuth 只支持无需 client secret 的官方流程（GitLab /
+              Microsoft / Google 授权码 + PKCE、GitHub 设备码、E10
+              平台授权）；令牌与会话只保存在本机保险库。
+            </p>
+            <button
+              className="button small"
+              disabled={busy}
+              onClick={() =>
+                void onUpdateDetails({
+                  provider: provider === "auto" ? null : provider,
+                  check_path: checkPath.trim() || null,
+                  oauth_client_id: oauthClientId.trim() || null,
+                  oauth_scope: oauthScope.trim() || null,
+                  oauth_tenant: oauthTenant.trim() || null,
+                })
+              }
+            >
+              保存设置
+            </button>
+          </details>
+        )}
+      </details>
     </section>
   );
 }
@@ -1184,15 +1200,21 @@ export function OAuthDialog({
   site,
   onClose,
   onRefresh,
+  onSucceeded,
+  onFallbackLogin,
 }: {
   site: SiteSummary;
   onClose: () => void;
   onRefresh: () => Promise<void>;
+  onSucceeded?: () => void;
+  /** Offer the isolated browser login window when the provider cannot echo
+   * the OAuth state (E10 contract). */
+  onFallbackLogin?: () => void;
 }) {
   const [info, setInfo] = useState<OAuthStart | null>(null);
-  const [stage, setStage] = useState<"starting" | "waiting" | "done" | "error">(
-    "starting",
-  );
+  const [stage, setStage] = useState<
+    "starting" | "waiting" | "done" | "error" | "fallback"
+  >("starting");
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -1209,13 +1231,20 @@ export function OAuthDialog({
         }
         setInfo(start);
         setStage("waiting");
-        await call("oauth_complete", {
+        const result = await call<{ status?: string }>("oauth_complete", {
           sessionId: start.session_id,
           alias: site.alias,
         });
         if (cancelled) return;
+        // The platform did not echo the OAuth state: nothing was exchanged.
+        // The isolated browser login window is the supported fallback.
+        if (result?.status === "state_not_returned") {
+          setStage("fallback");
+          return;
+        }
         setStage("done");
         await onRefresh();
+        onSucceeded?.();
       } catch (err) {
         if (!cancelled) {
           setError(errorText(err));
@@ -1275,6 +1304,19 @@ export function OAuthDialog({
           </div>
         </div>
       )}
+      {stage === "fallback" && (
+        <div className="stack-form">
+          <div className="info-box">
+            <Icon name="globe" />
+            <p>
+              平台未回传 OAuth state，本次授权已终止且未交换任何凭据。
+              {onFallbackLogin
+                ? "可改用独立浏览器窗口完成登录。"
+                : "请关闭后使用本页的“登录账号 / 重新登录”按钮，改用独立浏览器窗口完成登录。"}
+            </p>
+          </div>
+        </div>
+      )}
       {stage === "error" && (
         <div className="stack-form">
           <Notice error={error} />
@@ -1288,6 +1330,10 @@ export function OAuthDialog({
         {stage === "waiting" ? (
           <button className="button" onClick={() => void cancelLogin()}>
             取消登录
+          </button>
+        ) : stage === "fallback" && onFallbackLogin ? (
+          <button className="button primary" onClick={onFallbackLogin}>
+            改用浏览器窗口登录
           </button>
         ) : (
           <button className="button primary" onClick={onClose}>
@@ -1305,7 +1351,8 @@ function RecentActivity({
 }: {
   entries: AuditEntry[];
   sites: SiteSummary[];
-}) {  if (!entries.length)
+}) {
+  if (!entries.length)
     return (
       <div className="quiet-empty">
         <Icon name="activity" size={22} />
@@ -1349,55 +1396,30 @@ function RecentActivity({
   );
 }
 
-const templates: {
+type WizardTemplate = {
   id: string;
   title: string;
   hint: string;
   type: SiteInput["auth_type"];
   url: string;
-}[] = [
-  {
-    id: "github",
-    title: "GitHub",
-    hint: "通过个人访问令牌连接 API",
-    type: "api_token",
-    url: "https://api.github.com",
-  },
-  {
-    id: "gitlab",
-    title: "GitLab",
-    hint: "支持自建实例与访问令牌",
-    type: "api_token",
-    url: "https://gitlab.com",
-  },
-  {
-    id: "website",
-    title: "网站登录",
-    hint: "在独立窗口中登录并保存会话",
-    type: "login",
-    url: "",
-  },
-  {
-    id: "api",
-    title: "通用 API",
-    hint: "API Token 或 HTTP Basic",
-    type: "api_token",
-    url: "",
-  },
-  {
-    id: "e10",
-    title: "E10",
-    hint: "独立登录窗口或 OAuth 回调",
-    type: "e10",
-    url: "",
-  },
-  {
-    id: "password",
-    title: "个人密码",
-    hint: "仅本人保管，不向 AI 开放",
-    type: "password",
-    url: "",
-  },
+  /** OAuth preset providers collect a client id instead of a token. */
+  oauth?: "microsoft" | "google";
+};
+
+/** Preset providers get their own group; clicking one starts the provider's
+ * real flow (OAuth by default, token only where the provider demands it). */
+const presetTemplates: WizardTemplate[] = [
+  { id: "e10", title: "E10 快捷授权", hint: "浏览器 OAuth 授权，未回传 state 时改用独立窗口", type: "e10", url: "https://www.e-cology.com.cn" },
+  { id: "microsoft", title: "Microsoft (Entra ID)", hint: "OAuth 授权码 + PKCE，无需 client secret", type: "api_token", url: "https://graph.microsoft.com", oauth: "microsoft" },
+  { id: "google", title: "Google 账号", hint: "OAuth 授权码 + PKCE，无需 client secret", type: "api_token", url: "https://www.googleapis.com", oauth: "google" },
+  { id: "gitee", title: "Gitee 访问令牌", hint: "私人令牌接入并验证账号身份", type: "api_token", url: "https://gitee.com" },
+];
+
+const genericTemplates: WizardTemplate[] = [
+  { id: "website", title: "浏览器登录", hint: "在独立窗口登录并保存会话", type: "login", url: "" },
+  { id: "api", title: "访问密钥", hint: "API Key、Bearer Token 或自定义请求头", type: "api_token", url: "" },
+  { id: "basic", title: "账号密码", hint: "使用 HTTP Basic 连接服务", type: "http_basic", url: "" },
+  { id: "authorization", title: "授权登录", hint: "授权回调、令牌交换与会话续期", type: "authflow", url: "" },
 ];
 
 function ConnectionWizard({
@@ -1411,21 +1433,17 @@ function ConnectionWizard({
   onClose: () => void;
   onFinished: (alias: string) => void;
 }) {
-  const [template, setTemplate] = useState<(typeof templates)[number] | null>(
-    null,
-  );
+  const [template, setTemplate] = useState<WizardTemplate | null>(null);
   const [saved, setSaved] = useState<SiteSummary | null>(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginComplete, setLoginComplete] = useState(false);
+  const [oauthOpen, setOauthOpen] = useState(false);
+  const [oauthDone, setOauthDone] = useState(false);
   const wizard = useRef<HTMLDivElement>(null);
   useEffect(() => {
     wizard.current?.closest(".library-content")?.scrollTo(0, 0);
   }, [template?.id, saved?.alias, loginComplete]);
-  const title = template
-    ? `添加${template.id === "website" || template.id === "api" ? "" : ` ${template.title} `}连接`
-    : "添加连接";
-  const needsLogin = saved && ["login", "e10"].includes(saved.auth_type);
-  const step = !template ? 0 : !saved || (needsLogin && !loginComplete) ? 1 : 2;
+  const title = template?.type === "password" ? "保存个人密码" : "添加连接";
   function uniqueAlias(base: string) {
     let alias = base;
     let suffix = 2;
@@ -1436,6 +1454,19 @@ function ConnectionWizard({
   const liveSite = saved
     ? sites.find((site) => site.alias === saved.alias) || saved
     : null;
+  // Preset OAuth connections carry extra.oauth_pending until the native
+  // exchange finishes, so they stay in the login step instead of consent.
+  const oauthPending = !!liveSite && siteDetails(liveSite).extra?.oauth_pending === true;
+  const needsLogin =
+    !!saved &&
+    (["login", "authflow", "e10"].includes(saved.auth_type) || oauthPending);
+  const step = !template
+    ? 0
+    : !saved || (needsLogin && !loginComplete)
+      ? 1
+      : 2;
+  const resumeUsesOAuth =
+    !!liveSite && (liveSite.auth_type === "e10" || oauthPending);
   return (
     <div ref={wizard} className="connection-wizard">
       <div className="wizard-top">
@@ -1450,8 +1481,8 @@ function ConnectionWizard({
         <h1>{title}</h1>
         <p>完成账号连接，再选择可以使用它的 AI。</p>
       </header>
-      <ol className="connection-steps">
-        {["选择服务", "连接账号", "授权 AI"].map((text, index) => (
+      {template?.type !== "password" && <ol className="connection-steps">
+        {["连接方式", "连接账号", "授权 AI"].map((text, index) => (
           <li
             key={text}
             className={
@@ -1465,16 +1496,18 @@ function ConnectionWizard({
             {text}
           </li>
         ))}
-      </ol>
+      </ol>}
       {!template ? (
         <>
-          <h2 className="wizard-section-title">你想连接什么服务？</h2>
+          <h2 className="wizard-section-title">预置提供商</h2>
           <div className="service-templates">
-            {templates.map((item) => (
+            {presetTemplates.map((item) => (
               <button
                 className="service-template"
                 key={item.id}
-                onClick={() => setTemplate(item)}
+                onClick={() => {
+                  setTemplate(item);
+                }}
               >
                 <ServiceMark name={item.title} kind={item.type} />
                 <span>
@@ -1485,47 +1518,93 @@ function ConnectionWizard({
               </button>
             ))}
           </div>
+          <h2 className="wizard-section-title">通用方式</h2>
+          <div className="service-templates">
+            {genericTemplates.map((item) => (
+              <button
+                className="service-template"
+                key={item.id}
+                onClick={() => {
+                  setTemplate(item);
+                }}
+              >
+                <ServiceMark name={item.title} kind={item.type} />
+                <span>
+                  <strong>{item.title}</strong>
+                  <small>{item.hint}</small>
+                </span>
+                <Icon name="chevron" size={16} />
+              </button>
+            ))}
+          </div>
+          <button className="text-button" onClick={() => setTemplate({ id: "password", title: "个人密码", hint: "仅保管", type: "password", url: "" })}>只需保管密码？保存个人密码</button>
           <p className="panel-hint">
             账号信息保存在本机。选择 AI 并确认授权前，连接仅供你本人使用。
           </p>
         </>
       ) : !saved ? (
         <>
-          <EntryDialog
-            key={template.id}
-            embedded
-            initial={{
-              name: template.title,
-              alias: uniqueAlias(template.id),
-              site_url: template.url,
-              auth_type: template.type,
-            }}
-            onClose={() => setTemplate(null)}
-            onSaved={async (input) => {
-            // Never retain user-entered secrets in the flow's metadata state.
-            const { secret: _secret, ...metadata } = input;
-            const summary: SiteSummary = {
-              ...metadata,
-              id: input.alias,
-              status: ["login", "e10"].includes(input.auth_type)
-                ? "pending"
-                : "active",
-              created_at: "",
-              updated_at: "",
-            };
-            setSaved(summary);
-            await onRefresh();
-            if (["login", "e10"].includes(input.auth_type)) setLoginOpen(true);
-            if (input.auth_type === "password") onFinished(input.alias);
-          }}
-        />
-          {["github", "gitlab"].includes(template.id) && (
-            <p className="panel-hint">
-              也可以使用免密 OAuth 授权（GitHub 设备码 / GitLab
-              浏览器授权）：需要在 {template.title}
-              注册应用并保存 client_id。添加连接后，在连接详情的“检查与 OAuth
-              设置”中配置；未配置时继续使用 Token，不存在假的一键登录。
-            </p>
+          {template.oauth ? (
+            <OAuthPresetDialog
+              key={template.id}
+              provider={template.oauth}
+              initial={{
+                alias: uniqueAlias(template.id),
+                site_url: template.url,
+              }}
+              onClose={() => setTemplate(null)}
+              onSaved={async (input) => {
+                // Never retain user-entered secrets in the flow's metadata state.
+                const { secret: _secret, ...metadata } = input;
+                const summary: SiteSummary = {
+                  ...metadata,
+                  id: input.alias,
+                  status: "pending",
+                  created_at: "",
+                  updated_at: "",
+                };
+                setSaved(summary);
+                await onRefresh();
+                setOauthDone(false);
+                setOauthOpen(true);
+              }}
+            />
+          ) : (
+            <EntryDialog
+              key={template.id}
+              embedded
+              initial={{
+                name: "",
+                alias: uniqueAlias(template.id),
+                site_url: template.url,
+                auth_type: template.type,
+              }}
+              onClose={() => setTemplate(null)}
+              onSaved={async (input) => {
+                // Never retain user-entered secrets in the flow's metadata state.
+                const { secret: _secret, ...metadata } = input;
+                const summary: SiteSummary = {
+                  ...metadata,
+                  id: input.alias,
+                  status: ["login", "authflow", "e10"].includes(input.auth_type)
+                    ? "pending"
+                    : "active",
+                  created_at: "",
+                  updated_at: "",
+                };
+                setSaved(summary);
+                await onRefresh();
+                // E10 defaults to the OAuth authorization; the isolated
+                // browser window stays available as the fallback.
+                if (input.auth_type === "e10") {
+                  setOauthDone(false);
+                  setOauthOpen(true);
+                } else if (["login", "authflow"].includes(input.auth_type)) {
+                  setLoginOpen(true);
+                }
+                if (input.auth_type === "password") onFinished(input.alias);
+              }}
+            />
           )}
         </>
       ) : needsLogin && !loginComplete ? (
@@ -1533,10 +1612,33 @@ function ConnectionWizard({
           <ServiceMark name={saved.name || saved.alias} />
           <h2>继续完成账号登录</h2>
           <p>连接已保存。完成登录后，再选择允许使用它的 AI。</p>
-          <button className="button primary" onClick={() => setLoginOpen(true)}>
-            <Icon name="globe" />
-            打开登录窗口
-          </button>
+          {resumeUsesOAuth ? (
+            <>
+              <button
+                className="button primary"
+                onClick={() => {
+                  setOauthDone(false);
+                  setOauthOpen(true);
+                }}
+              >
+                <Icon name="globe" />
+                开始 OAuth 授权
+              </button>
+              {liveSite?.auth_type === "e10" && (
+                <button className="text-button" onClick={() => setLoginOpen(true)}>
+                  改用浏览器窗口登录
+                </button>
+              )}
+            </>
+          ) : (
+            <button
+              className="button primary"
+              onClick={() => setLoginOpen(true)}
+            >
+              <Icon name="globe" />
+              打开登录窗口
+            </button>
+          )}
           <button
             className="text-button"
             onClick={() => onFinished(saved.alias)}
@@ -1566,6 +1668,26 @@ function ConnectionWizard({
           }}
         />
       )}
+      {oauthOpen && liveSite && (
+        <OAuthDialog
+          site={liveSite}
+          onClose={() => {
+            setOauthOpen(false);
+            if (oauthDone) setLoginComplete(true);
+          }}
+          onRefresh={onRefresh}
+          onSucceeded={() => setOauthDone(true)}
+          onFallbackLogin={
+            liveSite.auth_type === "e10"
+              ? () => {
+                  setOauthOpen(false);
+                  setLoginOpen(true);
+                }
+              : undefined
+          }
+        />
+      )}
+
     </div>
   );
 }
@@ -1879,4 +2001,18 @@ function ConnectionConsent({
       )}
     </div>
   );
+}
+
+function AuthenticationConfigDialog({site,onClose,onSaved}:{site:SiteSummary;onClose:()=>void;onSaved:()=>Promise<void>}) {
+  const [kind,setKind]=useState(["login","authflow","e10","api_token","http_basic","cookie_jar"].includes(site.auth_type)?site.auth_type:"login");
+  const [config,setConfig]=useState("");
+  const action=useAction();
+  return <Modal title="认证配置" subtitle={site.name || site.alias} onClose={onClose}>
+    <form className="stack-form" onSubmit={e=>{e.preventDefault();void action.run(async()=>{const profile=JSON.parse(config);await call("authflow_configure",{alias:site.alias,authType:kind,profile});await onSaved();});}}>
+      <label>连接方式<select value={kind} onChange={e=>setKind(e.target.value as typeof kind)}><option value="login">浏览器登录</option><option value="e10">E10 快捷授权</option><option value="authflow">授权登录</option><option value="api_token">访问密钥</option><option value="http_basic">HTTP Basic 账号密码</option><option value="cookie_jar">导入的 Cookie</option></select></label>
+      <label>替换认证流程 JSON<textarea required rows={12} value={config} onChange={e=>setConfig(e.target.value)} placeholder={'{"headers":{"X-Session":"${cookie:SESSION}"}}'} spellCheck={false}/></label>
+      <p className="panel-hint">现有凭据和账号绑定会保留。填写完整的新配置；原配置不会回显其中可能包含的秘密。保存后需重新检查连接。旧版连接也可在这里转换为通用连接方式。</p>
+      <Notice error={action.error}/><div className="modal-actions"><button type="button" className="button" onClick={onClose}>取消</button><button className="button primary" disabled={action.busy}>保存配置</button></div>
+    </form>
+  </Modal>;
 }

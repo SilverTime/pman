@@ -30,7 +30,7 @@ CSRF token，仅在内存中将其注入本次请求的 `X-CSRF-Token`。这属�
 - 不跟随重定向，不扩大 Cookie 的域、路径或 Secure 范围。
 - 页面不可用、非 HTML、超出大小限制或 token 无效时，停止发送业务写入。
 - 不缓存或落盘 token；服务端回显 token 时阻止返回；不自动重试业务写入。
-- GET、非 GitLab Cookie 和 API token / E10 认证沿用原逻辑。
+- GET、非 GitLab Cookie 和 API token / 通用连接 认证沿用原逻辑。
 - 现有授权规则无需重新添加；已安装桌面 broker 必须更新并重启后才会生效。
 
 针对性回归：`cargo test -p pman-core http_proxy::tests`（在 `rust` 目录运行）。

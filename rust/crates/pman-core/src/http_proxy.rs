@@ -256,7 +256,7 @@ pub fn sanitize(
     Ok(clean)
 }
 
-fn build_url(base: &str, path: &str, query: Option<&Value>) -> Result<String, ProxyError> {
+pub(crate) fn build_url(base: &str, path: &str, query: Option<&Value>) -> Result<String, ProxyError> {
     let mut url = base.trim_end_matches('/').to_owned();
     if !path.is_empty() {
         if !path.starts_with('/') {
@@ -349,6 +349,17 @@ fn inject_auth(
                 format!("Basic {}", BASE64.encode(format!("{username}:{password}"))),
             );
         }
+        "cookie_jar" | "login" if crate::e10::looks_like_session(secret, target) => {
+            let (sid, cookie, agent) =
+                crate::e10::request_auth(secret, target).map_err(|_| ProxyError::MissingSecret)?;
+            request = request
+                .header("eteamsid", sid)
+                .header("Cookie", cookie)
+                .header("agentType", &agent)
+                .header("isAgent", "true")
+                .header("User-Agent", format!("AgentType={agent},IsAgent=true"));
+        }
+        "cookie_jar" | "login" if secret.get("auth_profile").is_some() => {},
         "cookie_jar" | "login" => {
             let pairs = cookie_pairs(secret, target)?
                 .into_iter()
@@ -369,7 +380,13 @@ fn inject_auth(
                 .header("isAgent", "true")
                 .header("User-Agent", format!("AgentType={agent},IsAgent=true"));
         }
+        "authflow" => {}
         _ => return Err(ProxyError::UnsupportedAuthType),
+    }
+    if (secret.get("auth_profile").is_some() || auth_type == "authflow")
+        && !crate::e10::looks_like_session(secret, target)
+    {
+        request = crate::authflow::apply_auth(request, secret, target).map_err(|_| ProxyError::MissingSecret)?;
     }
     Ok(request)
 }
@@ -646,10 +663,16 @@ fn replace_secrets(mut text: String, secrets: &[String]) -> (String, usize) {
 
 pub(crate) fn secret_values(secret: &Value, site: &SiteSummary) -> Vec<String> {
     let mut values = Vec::new();
-    if matches!(site.auth_type.as_str(), "cookie_jar" | "login" | "e10") {
+    if matches!(site.auth_type.as_str(), "cookie_jar" | "login" | "authflow" | "e10") {
         collect_cookie_values(secret, &mut values);
         if let Some(sid) = secret.get("eteamsid").and_then(Value::as_str) {
             values.push(sid.to_owned());
+        }
+        if let Some(variables) = secret.get("variables") { collect_strings(variables, &mut values); }
+        if let Some(profile) = secret.get("auth_profile") {
+            // Constants may themselves be credentials; redact them too.
+            if let Some(headers) = profile.get("headers") { collect_strings(headers, &mut values); }
+            if let Some(cookies) = profile.get("cookies") { collect_strings(cookies, &mut values); }
         }
     } else {
         collect_strings(secret, &mut values);
@@ -985,19 +1008,19 @@ mod tests {
     }
 
     #[test]
-    fn e10_response_redacts_sessions_without_masking_metadata() {
-        let site = site("e10");
+    fn authflow_response_redacts_sessions_without_masking_metadata() {
+        let site = site("authflow");
         let raw = RawResponse {
             status_code: 200, headers: BTreeMap::new(),
-            body: serde_json::to_vec(&json!({"data":"synthetic-eteamsid","origin":"https://e10.example","account":"user-1"})).unwrap(),
+            body: serde_json::to_vec(&json!({"data":"synthetic-session_value","origin":"https://authflow.example","account":"user-1"})).unwrap(),
             original_bytes: 100, hard_truncated: false,
         };
-        let clean = sanitize(raw,&Policy::default().redact,&json!({"eteamsid":"synthetic-eteamsid","origin":"https://e10.example","account_id":"user-1",
-            "cookies":[{"name":"ETEAMSID","value":"synthetic-eteamsid","path":"/","domain":"e10.example"}]}),&site).unwrap();
+        let clean = sanitize(raw,&Policy::default().redact,&json!({"session_value":"synthetic-session_value","origin":"https://authflow.example","account_id":"user-1",
+            "cookies":[{"name":"SESSION","value":"synthetic-session_value","path":"/","domain":"authflow.example"}]}),&site).unwrap();
         assert_eq!(clean.body_json.as_ref().unwrap()["data"], crate::REDACTED);
         assert_eq!(
             clean.body_json.as_ref().unwrap()["origin"],
-            "https://e10.example"
+            "https://authflow.example"
         );
         assert_eq!(clean.body_json.as_ref().unwrap()["account"], "user-1");
     }
@@ -1011,18 +1034,18 @@ mod tests {
             "/allowed#admin",
         ] {
             assert!(
-                build_url("https://e10.example", path, None).is_err(),
+                build_url("https://authflow.example", path, None).is_err(),
                 "{path}"
             );
         }
         assert_eq!(
             build_url(
-                "https://e10.example",
+                "https://authflow.example",
                 "/api/check",
                 Some(&json!({"q":"中文"}))
             )
             .unwrap(),
-            "https://e10.example/api/check?q=%E4%B8%AD%E6%96%87"
+            "https://authflow.example/api/check?q=%E4%B8%AD%E6%96%87"
         );
     }
 

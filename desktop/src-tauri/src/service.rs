@@ -26,44 +26,54 @@ pub struct LoginBinding {
     pub generation: u64,
     pub auth_epoch: u64,
 }
-pub struct PendingE10 {
+pub struct PendingConnection {
     pub alias: String,
     pub origin: String,
-    pub flow: Option<pman_core::e10::E10AuthFlow>,
+    pub flow: Option<pman_core::authflow::ConnectionAuthFlow>,
     pub generation: u64,
     pub auth_epoch: u64,
 }
 /// Provider-agnostic OAuth flow handle. Secrets never leave the flow.
 pub enum PendingOAuthFlow {
-    GitLab(pman_core::oauth::GitLabOAuthFlow),
-    GitHub(pman_core::oauth::GitHubDeviceFlow),
+    /// Authorization-code + PKCE: GitLab, Microsoft, Google.
+    AuthCode(pman_core::oauth::AuthorizationCodeFlow),
+    /// GitHub device flow.
+    Device(pman_core::oauth::GitHubDeviceFlow),
+    /// E10 platform-private authorization code (cookie session result).
+    E10(pman_core::oauth::E10OAuthFlow),
 }
 impl PendingOAuthFlow {
     pub fn info(&self) -> pman_core::oauth::OAuthStart {
         match self {
-            Self::GitLab(flow) => flow.info(),
-            Self::GitHub(flow) => flow.info(),
+            Self::AuthCode(flow) => flow.info(),
+            Self::Device(flow) => flow.info(),
+            Self::E10(flow) => flow.info(),
         }
     }
     pub fn cancellation(&self) -> Arc<std::sync::atomic::AtomicBool> {
         match self {
-            Self::GitLab(flow) => flow.cancellation(),
-            Self::GitHub(flow) => flow.cancellation(),
+            Self::AuthCode(flow) => flow.cancellation(),
+            Self::Device(flow) => flow.cancellation(),
+            Self::E10(flow) => flow.cancellation(),
         }
     }
     pub fn cancel(&self) {
         match self {
-            Self::GitLab(flow) => flow.cancel(),
-            Self::GitHub(flow) => flow.cancel(),
+            Self::AuthCode(flow) => flow.cancel(),
+            Self::Device(flow) => flow.cancel(),
+            Self::E10(flow) => flow.cancel(),
         }
     }
     pub fn complete(
         self,
         timeout: Duration,
-    ) -> Result<pman_core::oauth::OAuthResult, pman_core::oauth::OAuthError> {
+    ) -> Result<pman_core::oauth::LoginOutcome, pman_core::oauth::OAuthError> {
         match self {
-            Self::GitLab(flow) => flow.complete(timeout),
-            Self::GitHub(flow) => flow.complete(timeout),
+            Self::AuthCode(flow) => flow.complete(timeout).map(pman_core::oauth::LoginOutcome::Tokens),
+            Self::Device(flow) => flow.complete(timeout).map(pman_core::oauth::LoginOutcome::Tokens),
+            Self::E10(flow) => flow
+                .complete(timeout)
+                .map(pman_core::oauth::LoginOutcome::E10Session),
         }
     }
 }
@@ -80,8 +90,8 @@ pub struct Shared {
     pub management: Arc<Mutex<ManagementState>>,
     pub home: PathBuf,
     pub browser_logins: Arc<Mutex<HashMap<String, LoginBinding>>>,
-    pub e10_flows: Arc<Mutex<HashMap<String, PendingE10>>>,
-    pub e10_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    pub authflow_flows: Arc<Mutex<HashMap<String, PendingConnection>>>,
+    pub authflow_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     pub oauth_flows: Arc<Mutex<HashMap<String, PendingOAuth>>>,
     /// Single-flight guard per alias while a token refresh is running.
     pub oauth_refreshing: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
@@ -105,8 +115,8 @@ impl Shared {
             management: Arc::new(Mutex::new(management)),
             home,
             browser_logins: Default::default(),
-            e10_flows: Default::default(),
-            e10_cancellations: Default::default(),
+            authflow_flows: Default::default(),
+            authflow_cancellations: Default::default(),
             oauth_flows: Default::default(),
             oauth_refreshing: Default::default(),
             web_sessions: Arc::new(pman_core::WebSessions::new()),
@@ -149,12 +159,12 @@ impl Shared {
         self.cancel_logins();
     }
     fn cancel_logins(&self) {
-        if let Ok(cancellations) = self.e10_cancellations.lock() {
+        if let Ok(cancellations) = self.authflow_cancellations.lock() {
             for flag in cancellations.values() {
                 flag.store(true, std::sync::atomic::Ordering::SeqCst);
             }
         }
-        if let Ok(mut flows) = self.e10_flows.lock() {
+        if let Ok(mut flows) = self.authflow_flows.lock() {
             flows.clear();
         }
         if let Ok(mut logins) = self.browser_logins.lock() {

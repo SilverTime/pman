@@ -31,7 +31,8 @@ const kinds: {
     icon: "terminal",
   },
   { id: "login", title: "登录网站", hint: "独立窗口保存会话", icon: "globe" },
-  { id: "e10", title: "连接 E10", hint: "多环境与代理身份", icon: "shield" },
+  { id: "e10", title: "E10 快捷授权", hint: "独立窗口登录并验证 E10 账号", icon: "globe" },
+  { id: "authflow", title: "授权登录", hint: "OAuth 与自定义认证流程", icon: "shield" },
 ];
 
 function parseCookies(value: string): unknown[] {
@@ -88,7 +89,7 @@ export function CredentialDetail({
   const state = statusLabel(site);
   const action = useAction();
   const [secret, setSecret] = useState<Record<string, unknown> | null>(null);
-  const loginType = site.auth_type === "login" || site.auth_type === "e10";
+  const loginType = ["login", "authflow", "e10"].includes(site.auth_type);
   const secretField =
     site.auth_type === "api_token"
       ? "token"
@@ -237,13 +238,13 @@ export function CredentialDetail({
               更新凭据
             </button>
           )}
-          {site.auth_type === "e10" && (
+          {["authflow", "e10"].includes(site.auth_type) && (
             <button
               className="button small"
               disabled={action.busy}
               onClick={() =>
                 void action.run(async () => {
-                  const result = await call<ConnectionCheck>("e10_check", {
+                  const result = await call<ConnectionCheck>("authflow_check", {
                     alias: site.alias,
                   });
                   action.setMessage(
@@ -362,11 +363,17 @@ export function EntryDialog({
   const [password, setPassword] = useState("");
   const [token, setToken] = useState("");
   const [header, setHeader] = useState(
-    initial?.auth_type === "api_token" && initial?.name === "GitLab"
-      ? "Private-Token"
-      : "",
+    "",
   );
   const [cookies, setCookies] = useState("");
+  const [profileText, setProfileText] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [grantKind, setGrantKind] = useState("code");
+  const [authOrigin, setAuthOrigin] = useState("");
+  const [authPath, setAuthPath] = useState("/oauth/authorize");
+  const [tokenPath, setTokenPath] = useState("/oauth/token");
+  const [identityPath, setIdentityPath] = useState("/user");
+  const [identityPointer, setIdentityPointer] = useState("/id");
   const [visible, setVisible] = useState(false);
   const action = useAction();
   useEffect(() => {
@@ -397,6 +404,20 @@ export function EntryDialog({
       } else if (kind === "cookie_jar")
         secret = { cookies: parseCookies(cookies) };
       else secret = { cookies: [] };
+      let authProfile: Record<string, unknown> | undefined;
+      if (profileText.trim()) {
+        authProfile = JSON.parse(profileText);
+        if (!authProfile || typeof authProfile !== "object" || Array.isArray(authProfile)) throw new Error("认证配置必须是 JSON 对象。");
+      } else if (kind === "authflow") {
+        if (!clientId.trim()) throw new Error("请填写应用 Client ID，或使用完整的高级认证配置。");
+        authProfile = {
+          authorization: { path: authPath, params: { client_id: clientId }, pkce: grantKind === "code", kind: grantKind, ...(authOrigin.trim() ? { origin: authOrigin.trim() } : {}) },
+          exchange: [{ path: tokenPath, method: "POST", form: grantKind === "device" ? { grant_type: "urn:ietf:params:oauth:grant-type:device_code", client_id: clientId, device_code: "${code}" } : { grant_type: "authorization_code", client_id: clientId, code: "${code}", redirect_uri: "${redirect_uri}", code_verifier: "${verifier}" }, extract: { access_token: ["/access_token"] }, optional_extract: { refresh_token: ["/refresh_token"] } }],
+          headers: { Authorization: "Bearer ${var:access_token}" },
+          check: { request: { path: identityPath }, user_id: [identityPointer] },
+        };
+      }
+      if (authProfile) { secret.auth_profile = authProfile; secret.origin = new URL(url || site?.site_url || "").origin; }
       const input: SiteInput = {
         alias: alias.trim(),
         site_url: url.trim(),
@@ -409,7 +430,9 @@ export function EntryDialog({
           account: account.trim(),
           environment: environment.trim(),
           group: group.trim(),
+          provider: kind === "e10" ? "e10" : null,
           ai_enabled: false,
+          extra: { oauth_pending: kind === "authflow", configured_auth: Boolean(authProfile), has_identity_check: Boolean(authProfile?.check), has_refresh: Array.isArray(authProfile?.refresh) && authProfile.refresh.length > 0 },
         },
       };
       if (site) await call("site_rotate", { alias: site.alias, secret });
@@ -473,7 +496,7 @@ export function EntryDialog({
                     autoFocus
                     value={name}
                     onChange={(event) => setName(event.target.value)}
-                    placeholder="例如 E10 测试环境"
+                    placeholder="例如 公司办公系统"
                   />
                 </label>
                 {!embedded && (
@@ -483,7 +506,7 @@ export function EntryDialog({
                       required
                       value={alias}
                       onChange={(event) => setAlias(event.target.value)}
-                      placeholder="例如 e10-test"
+                      placeholder="例如 office-test"
                       autoCapitalize="none"
                       spellCheck={false}
                     />
@@ -565,7 +588,7 @@ export function EntryDialog({
             </>
           )}
           {!site &&
-            (!embedded || initial?.name === "通用 API") &&
+            (!embedded) &&
             (kind === "api_token" || kind === "http_basic") && (
               <label>
                 API 认证方式
@@ -619,11 +642,36 @@ export function EntryDialog({
               <small>支持 Cookie JSON 数组，保留域、路径和有效期。</small>
             </label>
           )}
-          {(kind === "login" || kind === "e10") && (
+          {kind === "authflow" && !site && (
+            <div className="stack-form">
+              <label>授权方式<select value={grantKind} onChange={e => setGrantKind(e.target.value)}><option value="code">授权码 + PKCE</option><option value="device">设备码</option></select></label>
+              <label>授权服务器地址（可选）<input type="url" value={authOrigin} onChange={e => setAuthOrigin(e.target.value)} placeholder="默认使用连接地址" /></label>
+              <label>应用 Client ID<input value={clientId} onChange={e => setClientId(e.target.value)} /></label>
+              <div className="form-grid">
+                <label>授权路径<input value={authPath} onChange={e => setAuthPath(e.target.value)} /></label>
+                <label>令牌交换路径<input value={tokenPath} onChange={e => setTokenPath(e.target.value)} /></label>
+                <label>身份检查路径<input value={identityPath} onChange={e => setIdentityPath(e.target.value)} /></label>
+                <label>账号 ID 的 JSON Pointer<input value={identityPointer} onChange={e => setIdentityPointer(e.target.value)} /></label>
+              </div>
+              <small>默认使用授权码与 PKCE；回调地址使用本机端口。固定回调端口及多步交换可在高级配置中设置。</small>
+            </div>
+          )}
+          {kind !== "password" && kind !== "e10" && (
+            <details className="connection-extra">
+              <summary>高级认证配置（可选）</summary>
+              <label>认证流程 JSON<textarea rows={10} value={profileText} onChange={e => setProfileText(e.target.value)} placeholder={'{"headers":{"X-Session":"${cookie:SESSION}"}}'} spellCheck={false} /></label>
+              <small>支持 Cookie 映射、固定请求头、多步交换、身份检查和续期。完整配置会覆盖上面的授权默认值；凭据变量仅在本机解析。</small>
+            </details>
+          )}
+          {(kind === "login" || kind === "authflow" || kind === "e10") && (
             <div className="info-box">
               <Icon name="globe" />
               <p>
-                保存连接后打开独立登录窗口。完成登录，再回到这里保存并验证会话。
+                {kind === "authflow"
+                  ? "保存连接后打开系统浏览器授权。完成授权后，将自动交换凭据并验证身份。"
+                  : kind === "e10"
+                    ? "保存连接后打开浏览器完成 E10 OAuth 授权；平台未回传 state 时改用独立登录窗口。"
+                    : "保存连接后打开独立登录窗口。完成登录，再回到这里保存并验证会话。"}
               </p>
             </div>
           )}
@@ -679,7 +727,7 @@ export function EntryDialog({
             >
               {action.busy
                 ? "保存中…"
-                : kind === "login" || kind === "e10"
+                : kind === "login" || kind === "authflow" || kind === "e10"
                   ? "保存并登录"
                   : embedded
                     ? "保存并继续"
@@ -688,6 +736,154 @@ export function EntryDialog({
           </div>
         </form>
       )}
+    </EntryFrame>
+  );
+}
+
+/** Step-1 form for preset OAuth providers (Microsoft / Google): collect the
+ * client id, save a pending connection and hand over to the OAuth dialog.
+ * No token is ever typed here — the access token arrives only through the
+ * native OAuth exchange. */
+export function OAuthPresetDialog({
+  provider,
+  initial,
+  onClose,
+  onSaved,
+}: {
+  provider: "microsoft" | "google";
+  initial: { alias: string; site_url: string };
+  onClose: () => void;
+  onSaved: (input: SiteInput) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [alias, setAlias] = useState(initial.alias);
+  const [url, setUrl] = useState(initial.site_url);
+  const [clientId, setClientId] = useState("");
+  const [scope, setScope] = useState("");
+  const [tenant, setTenant] = useState("");
+  const action = useAction();
+  const microsoft = provider === "microsoft";
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    await action.run(async () => {
+      if (!alias.trim() || !/^[\p{L}\p{N}_.-]+$/u.test(alias.trim()))
+        throw new Error("别名使用文字、数字、短横线或下划线，不能包含空格。");
+      const origin = new URL(url.trim());
+      if (!["https:", "http:"].includes(origin.protocol))
+        throw new Error("请输入完整的 HTTP 或 HTTPS 站点地址。");
+      if (!clientId.trim())
+        throw new Error(
+          "请填写在提供方注册的 OAuth 应用 client_id（无需 client secret）。",
+        );
+      const input: SiteInput = {
+        alias: alias.trim(),
+        site_url: url.trim(),
+        auth_type: "api_token",
+        secret: { oauth_pending: true },
+        name: name.trim() || null,
+        purpose: null,
+        tags: [],
+        details: {
+          account: "",
+          environment: "",
+          group: "",
+          provider,
+          ai_enabled: false,
+          oauth_client_id: clientId.trim(),
+          oauth_scope: scope.trim() || null,
+          oauth_tenant: microsoft ? tenant.trim() || null : null,
+          extra: { oauth_pending: true },
+        },
+      };
+      await call("site_add", { input });
+      await onSaved(input);
+    });
+  }
+  return (
+    <EntryFrame
+      embedded
+      title={microsoft ? "接入 Microsoft (Entra ID)" : "接入 Google 账号"}
+      subtitle="OAuth 授权码 + PKCE，全程无需 client secret；令牌只保存在本机保险库。"
+      onClose={() => {
+        if (!action.busy) onClose();
+      }}
+    >
+      <form className="stack-form" onSubmit={(event) => void save(event)}>
+        <Notice error={action.error} message={action.message} />
+        <div className="form-grid">
+          <label>
+            名称
+            <input
+              value={name}
+              placeholder="例如 公司账号"
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <label>
+            服务地址
+            <input
+              type="url"
+              value={url}
+              spellCheck={false}
+              onChange={(event) => setUrl(event.target.value)}
+            />
+          </label>
+        </div>
+        <label>
+          OAuth 应用 client_id
+          <input
+            value={clientId}
+            placeholder="在提供方注册的公开应用 ID"
+            spellCheck={false}
+            onChange={(event) => setClientId(event.target.value)}
+          />
+        </label>
+        <div className="form-grid">
+          <label>
+            OAuth scope
+            <input
+              value={scope}
+              placeholder={
+                microsoft ? "User.Read offline_access" : "openid email profile"
+              }
+              spellCheck={false}
+              onChange={(event) => setScope(event.target.value)}
+            />
+            <small>留空使用最小只读范围。</small>
+          </label>
+          {microsoft && (
+            <label>
+              tenant
+              <input
+                value={tenant}
+                placeholder="organizations（默认）/ consumers / common"
+                spellCheck={false}
+                onChange={(event) => setTenant(event.target.value)}
+              />
+              <small>个人账号需改为 consumers 或 common。</small>
+            </label>
+          )}
+        </div>
+        <div className="info-box">
+          <Icon name="shield" />
+          <p>
+            保存后立即打开浏览器完成授权。访问令牌由本机原生交换获得；
+            此表单不收集任何令牌、密码或 client secret。
+          </p>
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="button" onClick={onClose}>
+            取消
+          </button>
+          <button
+            type="submit"
+            className="button primary"
+            disabled={action.busy}
+          >
+            {action.busy ? "保存中…" : "保存并开始授权"}
+          </button>
+        </div>
+      </form>
     </EntryFrame>
   );
 }
@@ -934,11 +1130,11 @@ export function LoginDialog({
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
-  const [mode, setMode] = useState<"browser" | "oauth">("browser");
+  const [mode, setMode] = useState<"browser" | "oauth">(site.auth_type === "authflow" ? "oauth" : "browser");
   const [login, setLogin] = useState<LoginWindow | null>(null);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [complete, setComplete] = useState(false);
-  const [agentType, setAgentType] = useState("Codex");
+
   const action = useAction();
   const closed = useRef(false);
   const resources = useRef<{
@@ -957,7 +1153,7 @@ export function LoginDialog({
           () => undefined,
         );
       if (current.session)
-        void call("e10_cancel", {
+        void call("authflow_cancel", {
           sessionId: current.session.session_id,
         }).catch(() => undefined);
     },
@@ -966,15 +1162,13 @@ export function LoginDialog({
   async function start() {
     await action.run(async () => {
       if (mode === "oauth") {
-        const next = await call<AuthSession>("e10_begin", {
+        const next = await call<AuthSession>("authflow_begin", {
           alias: site.alias,
           siteUrl: site.site_url,
-          agentType,
-          pkceVerified: false,
         });
         resources.current.session = next;
         setSession(next);
-        const result = await call<ConnectionCheck>("e10_complete", {
+        const result = await call<ConnectionCheck>("authflow_complete", {
           sessionId: next.session_id,
           alias: site.alias,
         });
@@ -995,7 +1189,7 @@ export function LoginDialog({
   async function finish() {
     await action.run(async () => {
       if (session) {
-        const result = await call<ConnectionCheck>("e10_complete", {
+        const result = await call<ConnectionCheck>("authflow_complete", {
           sessionId: session.session_id,
           alias: site.alias,
         });
@@ -1009,8 +1203,8 @@ export function LoginDialog({
         if (!capture.saved)
           throw new Error("未获取到可保存的会话，请确认已经完成登录。");
         action.setMessage(
-          site.auth_type === "e10"
-            ? "E10 登录成功，身份检查已通过。"
+            ["authflow", "e10"].includes(site.auth_type)
+              ? "登录成功，身份检查已通过。"
             : `已保存 ${capture.cookie_count} 个 Cookie，尚未验证业务访问权限。`,
         );
       }
@@ -1027,7 +1221,7 @@ export function LoginDialog({
       subtitle={site.site_url}
       onClose={close}
     >
-      {!login && !session && site.auth_type === "e10" && (
+      {!login && !session && site.auth_type === "authflow" && (
         <div className="stack-form">
           <label>
             登录方式
@@ -1041,16 +1235,7 @@ export function LoginDialog({
               <option value="oauth">浏览器授权回调</option>
             </select>
           </label>
-          {mode === "oauth" && (
-            <label>
-              AI 代理身份
-              <input
-                value={agentType}
-                onChange={(event) => setAgentType(event.target.value)}
-                placeholder="Codex"
-              />
-            </label>
-          )}
+
         </div>
       )}
       <ol className="login-steps">
@@ -1072,12 +1257,13 @@ export function LoginDialog({
           <span>3</span>
           <div>
             <strong>
-              {site.auth_type === "e10" ? "保存并检查身份" : "保存 Cookie 会话"}
+              {["authflow", "e10"].includes(site.auth_type) ? "保存并检查身份" : "保存 Cookie 会话"}
             </strong>
             <p>会话写入本机保险库，登录信息不返回 AI。</p>
           </div>
         </li>
       </ol>
+      {session?.user_code && <div className="info-box"><p>在授权页面输入设备码：<strong>{session.user_code}</strong></p></div>}
       {session && action.busy && (
         <div className="info-box">
           <Icon name="globe" />

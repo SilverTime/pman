@@ -9,6 +9,14 @@
 //!   (checked 2026-09-19, REST API version 2022-11-28)
 //! - GitLab v4 `GET /api/v4/user` — https://docs.gitlab.com/ee/api/users.html
 //!   (checked 2026-09-19, GitLab REST API v4)
+//! - Gitee v5 `GET /api/v5/user` — https://gitee.com/api/v5 (checked
+//!   2026-09-21, Token path only — see OAUTH-PROVIDERS.md §2.6)
+//! - Microsoft Graph `GET /v1.0/me` — https://learn.microsoft.com/en-us/graph/api/user-get
+//!   (checked 2026-09-21, connection origin `graph.microsoft.com`)
+//! - Google OIDC userinfo `GET https://openidconnect.googleapis.com/v1/userinfo`
+//!   — https://developers.google.com/identity/openid-connect/openid-connect
+//!   (checked 2026-09-21; provider-constant absolute endpoint because the
+//!   identity origin differs from the business API origin)
 
 use crate::status::{CheckEvidence, STATE_FORBIDDEN, STATE_NETWORK_ERROR, STATE_READY, STATE_RATE_LIMITED, STATE_TIMEOUT, STATE_UNAUTHORIZED, STATE_VERIFIED};
 use crate::{ConnectionDetails, SiteSummary, Vault, VaultError};
@@ -18,12 +26,23 @@ use std::time::Duration;
 
 pub const PROVIDER_GITHUB: &str = "github";
 pub const PROVIDER_GITLAB: &str = "gitlab";
+pub const PROVIDER_GITEE: &str = "gitee";
+pub const PROVIDER_MICROSOFT: &str = "microsoft";
+pub const PROVIDER_GOOGLE: &str = "google";
 pub const PROVIDER_CUSTOM: &str = "custom";
+pub const PROVIDER_CONNECTION: &str = "authflow";
 pub const PROVIDER_E10: &str = "e10";
 pub const PROVIDER_NONE: &str = "none";
 /// Default identity endpoint per provider, relative to the site URL.
 pub const GITHUB_CHECK_PATH: &str = "/user";
 pub const GITLAB_CHECK_PATH: &str = "/api/v4/user";
+pub const GITEE_CHECK_PATH: &str = "/api/v5/user";
+pub const MICROSOFT_CHECK_PATH: &str = "/v1.0/me";
+/// Google's documented userinfo endpoint lives on a different origin than
+/// the business API (`www.googleapis.com`). It is a provider constant, never
+/// user input, so it cannot become an SSRF vector; the shared proxy chain
+/// only carries same-origin requests (see `http_proxy::build_url`).
+pub const GOOGLE_IDENTITY_ENDPOINT: &str = "https://openidconnect.googleapis.com/v1/userinfo";
 
 /// Result of one check. `message`/`account`/`scope` are safe to display:
 /// they never contain credential material or raw response bodies.
@@ -49,15 +68,19 @@ pub struct CheckOutcome {
 /// Resolve which check applies. Explicit details win over host detection;
 /// unknown services without a check path yield `PROVIDER_NONE`.
 pub fn resolve_provider(site: &SiteSummary, details: &ConnectionDetails) -> String {
-    if site.auth_type == "e10" {
+    if site.auth_type == "e10" || details.provider.as_deref() == Some(PROVIDER_E10) {
         return PROVIDER_E10.into();
+    }
+    if site.auth_type == "authflow" {
+        return PROVIDER_CONNECTION.into();
     }
     if site.auth_type == "password" || site.site_url.is_empty() {
         return PROVIDER_NONE.into();
     }
     if let Some(provider) = details.provider.as_deref() {
         match provider {
-            PROVIDER_GITHUB | PROVIDER_GITLAB => return provider.to_owned(),
+            PROVIDER_GITHUB | PROVIDER_GITLAB | PROVIDER_GITEE | PROVIDER_MICROSOFT
+            | PROVIDER_GOOGLE | PROVIDER_E10 => return provider.to_owned(),
             PROVIDER_CUSTOM => return PROVIDER_CUSTOM.into(),
             _ => return PROVIDER_NONE.into(),
         }
@@ -66,13 +89,9 @@ pub fn resolve_provider(site: &SiteSummary, details: &ConnectionDetails) -> Stri
         .ok()
         .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
         .unwrap_or_default();
-    if host == "api.github.com" {
-        PROVIDER_GITHUB.into()
-    } else if host == "gitlab.com" || host.ends_with(".gitlab.com") {
-        PROVIDER_GITLAB.into()
-    } else {
-        PROVIDER_NONE.into()
-    }
+    crate::oauth::infer_provider_for_host(&host)
+        .map(str::to_owned)
+        .unwrap_or_else(|| PROVIDER_NONE.into())
 }
 
 fn check_path(details: &ConnectionDetails, provider: &str, override_path: Option<&str>) -> Option<String> {
@@ -81,6 +100,11 @@ fn check_path(details: &ConnectionDetails, provider: &str, override_path: Option
         None => match provider {
             PROVIDER_GITHUB => Some(GITHUB_CHECK_PATH),
             PROVIDER_GITLAB => Some(GITLAB_CHECK_PATH),
+            PROVIDER_GITEE => Some(GITEE_CHECK_PATH),
+            PROVIDER_MICROSOFT => Some(MICROSOFT_CHECK_PATH),
+            // Google's identity endpoint is an absolute provider constant
+            // handled by its own branch below.
+            PROVIDER_GOOGLE => None,
             PROVIDER_CUSTOM => details.check_path.as_deref().map(str::trim).filter(|p| !p.is_empty()),
             _ => None,
         },
@@ -100,6 +124,8 @@ fn parse_identity(provider: &str, body: Option<&Value>) -> Option<String> {
     let name = match provider {
         PROVIDER_GITHUB => body.get("login"),
         PROVIDER_GITLAB => body.get("username"),
+        PROVIDER_GITEE => body.get("login"),
+        PROVIDER_MICROSOFT => body.get("userPrincipalName"),
         _ => None,
     }?
     .as_str()?;
@@ -112,7 +138,7 @@ fn parse_identity(provider: &str, body: Option<&Value>) -> Option<String> {
 }
 
 /// Prepared check material. The secret is cloned out under the vault lock
-/// (same pattern as the e10 session check) and zeroized on drop.
+/// (same pattern as the authflow session check) and zeroized on drop.
 pub struct ConnectionCheckPlan {
     pub alias: String,
     pub site: SiteSummary,
@@ -155,11 +181,6 @@ impl Vault {
         }
         let details = self.details(alias)?;
         let provider = resolve_provider(&site, &details);
-        if provider == PROVIDER_E10 {
-            return Err(VaultError::InvalidSchema(
-                "e10 连接请使用其专用检查".into(),
-            ));
-        }
         let path = check_path(&details, &provider, override_path);
         let secret = self.get_site_secret(alias)?;
         Ok(ConnectionCheckPlan {
@@ -198,6 +219,9 @@ impl Vault {
         )?;
         if outcome.provider == PROVIDER_GITHUB
             || outcome.provider == PROVIDER_GITLAB
+            || outcome.provider == PROVIDER_GITEE
+            || outcome.provider == PROVIDER_MICROSOFT
+            || outcome.provider == PROVIDER_GOOGLE
             || outcome.state != STATE_READY
         {
             self.record_check_evidence(
@@ -217,12 +241,51 @@ impl Vault {
 
 /// Phase 2: the network request. Runs without any vault lock.
 pub fn execute_connection_check(plan: &ConnectionCheckPlan, timeout: Duration) -> CheckOutcome {
+    if plan.provider == PROVIDER_E10 {
+        let result = crate::e10::check_session(&plan.site.site_url, &plan.secret);
+        return match result {
+            Ok(metadata) => CheckOutcome {
+                provider: PROVIDER_E10.into(),
+                state: STATE_VERIFIED.into(),
+                error_code: None,
+                message: format!("E10 账号身份已验证：{}", if metadata.user_name.is_empty() { &metadata.user_id } else { &metadata.user_name }),
+                account: Some(if metadata.user_name.is_empty() { metadata.user_id } else { metadata.user_name }),
+                scope: Some("E10 teamsCheck 只读检查".into()),
+                checked_at: metadata.checked_at,
+                http_status: Some(200),
+                saved_only: false,
+            },
+            Err(error) => CheckOutcome {
+                provider: PROVIDER_E10.into(),
+                state: if error.code() == "expired" { STATE_UNAUTHORIZED.into() } else { error.code().into() },
+                error_code: Some(error.code().into()),
+                message: error.to_string(),
+                account: None,
+                scope: Some("E10 teamsCheck 只读检查".into()),
+                checked_at: crate::vault::now(),
+                http_status: None,
+                saved_only: false,
+            },
+        };
+    }
+    if plan.secret.get("auth_profile").and_then(|v|v.get("check")).is_some_and(|v|!v.is_null()) {
+        let result = crate::authflow::check_session(&plan.site.site_url, &plan.secret);
+        let (state, error_code, account, message) = match result {
+            Ok(metadata) => (STATE_VERIFIED.to_owned(), None, Some(metadata.user_name), "账号身份已验证".to_owned()),
+            Err(e) => (if e.code()=="expired" {STATE_UNAUTHORIZED}else{e.code()}.to_owned(),Some(e.code().to_owned()),None,e.to_string()),
+        };
+        return CheckOutcome { provider: "configured".into(), state, error_code, account, message, scope: Some("配置的身份检查".into()), checked_at: crate::vault::now(), http_status: None, saved_only: false };
+    }
+    if plan.provider == PROVIDER_GOOGLE {
+        return google_identity_check(plan, timeout);
+    }
+
         let Some(path) = &plan.path else {
             return CheckOutcome {
                 provider: plan.provider.clone(),
                 state: crate::status::STATE_UNCHECKED.into(),
                 error_code: None,
-                message: "未知服务没有配置只读检查路径，目前仅报告保存状态".into(),
+                message: "未配置连接检查，目前仅报告保存状态".into(),
                 account: None,
                 scope: None,
                 checked_at: crate::vault::now(),
@@ -360,6 +423,174 @@ pub fn execute_connection_check(plan: &ConnectionCheckPlan, timeout: Duration) -
         }
     }
 
+/// Phase 2 helper for Google: the documented userinfo endpoint lives on a
+/// different origin than the business API, so the request cannot ride the
+/// same-origin proxy chain. The endpoint is a compile-time constant and only
+/// the whitelisted identity fields (`email`, then `sub`) are extracted — the
+/// response body is never surfaced or stored.
+fn google_identity_check(plan: &ConnectionCheckPlan, timeout: Duration) -> CheckOutcome {
+    let scope = Some("GET userinfo 只读检查（提供方身份端点）".to_owned());
+    let checked_at = crate::vault::now();
+    let outcome = |state: String, error_code: Option<&str>, message: String, account: Option<String>, http_status: Option<u16>| CheckOutcome {
+        provider: PROVIDER_GOOGLE.into(),
+        state,
+        error_code: error_code.map(str::to_owned),
+        message,
+        account,
+        scope: scope.clone(),
+        checked_at,
+        http_status,
+        saved_only: false,
+    };
+    let token = plan
+        .secret
+        .get("token")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty());
+    let Some(token) = token else {
+        return outcome(
+            crate::status::STATE_UNCHECKED.into(),
+            None,
+            "未保存访问令牌，目前仅报告保存状态".into(),
+            None,
+            None,
+        );
+    };
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => {
+            return outcome(
+                STATE_NETWORK_ERROR.into(),
+                Some("request_failed"),
+                "检查未能完成：无法创建请求".into(),
+                None,
+                None,
+            )
+        }
+    };
+    let response = client
+        .get(GOOGLE_IDENTITY_ENDPOINT)
+        .header("Accept", "application/json")
+        .header("User-Agent", crate::http_proxy::USER_AGENT)
+        .header("Authorization", format!("Bearer {token}"))
+        .send();
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            let timed_out = error.is_timeout();
+            return outcome(
+                if timed_out { STATE_TIMEOUT.into() } else { STATE_NETWORK_ERROR.into() },
+                Some(if timed_out { "timeout" } else { "network_error" }),
+                if timed_out {
+                    "检查请求超时，远端在时限内未返回".into()
+                } else {
+                    "检查请求未能到达远端服务；凭据保持不变".into()
+                },
+                None,
+                None,
+            );
+        }
+    };
+    let status = response.status().as_u16();
+    match status {
+        200..=299 => {}
+        401 => {
+            return outcome(
+                STATE_UNAUTHORIZED.into(),
+                Some("session_expired"),
+                "远端返回 401，此凭据可能已失效".into(),
+                None,
+                Some(status),
+            )
+        }
+        403 => {
+            return outcome(
+                STATE_FORBIDDEN.into(),
+                Some("explicit_deny"),
+                "远端返回 403；凭据可能有效但该账号没有此接口权限".into(),
+                None,
+                Some(status),
+            )
+        }
+        429 => {
+            return outcome(
+                STATE_RATE_LIMITED.into(),
+                Some("rate_limited"),
+                "远端返回 429，检查被限流".into(),
+                None,
+                Some(status),
+            )
+        }
+        _ => {
+            return outcome(
+                crate::status::STATE_INVALID_RESPONSE.into(),
+                Some("invalid_response"),
+                "检查返回了无法识别的响应".into(),
+                None,
+                Some(status),
+            )
+        }
+    }
+    let bytes: Vec<u8> = match response.bytes() {
+        Ok(bytes) => bytes.to_vec(),
+        Err(_) => {
+            return outcome(
+                STATE_NETWORK_ERROR.into(),
+                Some("network_error"),
+                "检查响应读取失败；凭据保持不变".into(),
+                None,
+                Some(status),
+            )
+        }
+    };
+    if bytes.len() > 512 * 1024 {
+        return outcome(
+            crate::status::STATE_INVALID_RESPONSE.into(),
+            Some("invalid_response"),
+            "检查返回了无法识别的响应".into(),
+            None,
+            Some(status),
+        );
+    }
+    let value: Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) => {
+            return outcome(
+                crate::status::STATE_INVALID_RESPONSE.into(),
+                Some("invalid_response"),
+                "检查返回了无法识别的响应".into(),
+                None,
+                Some(status),
+            )
+        }
+    };
+    let account = ["email", "sub"]
+        .iter()
+        .find_map(|field| value.get(*field).and_then(Value::as_str))
+        .map(str::to_owned)
+        .filter(|name| !name.trim().is_empty() && name.len() <= 128);
+    match account {
+        Some(account) => outcome(
+            STATE_VERIFIED.into(),
+            None,
+            format!("远端身份接口确认账号 {account}，检查请求正常返回"),
+            Some(account),
+            Some(status),
+        ),
+        None => outcome(
+            crate::status::STATE_INVALID_RESPONSE.into(),
+            Some("invalid_response"),
+            "身份接口未返回可显示的账号标识".into(),
+            None,
+            Some(status),
+        ),
+    }
+}
+
 impl Vault {
     /// Convenience wrapper for synchronous callers (tests, CLI).
     pub fn run_connection_check(
@@ -375,9 +606,9 @@ impl Vault {
         Ok(outcome)
     }
 
-    /// Record E10 session-check evidence through the status contract while
+    /// Record Connection session-check evidence through the status contract while
     /// keeping the legacy `extra.status` keys in sync.
-    pub fn finish_e10_evidence(
+    pub fn finish_authflow_evidence(
         &mut self,
         alias: &str,
         state: &str,
@@ -393,9 +624,9 @@ impl Vault {
                 checked_at: crate::vault::now(),
                 message: message.to_owned(),
                 error_code: error_code.filter(|code| !code.is_empty()).map(str::to_owned),
-                provider: Some(PROVIDER_E10.into()),
+                provider: Some(PROVIDER_CONNECTION.into()),
                 account: account.filter(|value| !value.is_empty()).map(str::to_owned),
-                scope: Some("E10 会话检查".into()),
+                scope: Some("Connection 会话检查".into()),
                 ..CheckEvidence::default()
             },
         )

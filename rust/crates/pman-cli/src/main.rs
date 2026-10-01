@@ -188,7 +188,13 @@ fn tools_list() -> Value {
      {"name":"pm_request_login","description":"Ask the user to refresh a granted connection's login in desktop. Never starts login or unlocks credentials by itself.","inputSchema":{"type":"object","properties":{"site":{"type":"string"},"reason":{"type":"string","maxLength":1000}},"required":["site"]}},
      {"name":"pm_request_access","description":"Request a human-reviewed scope for an explicitly known AI-enabled connection. This does not grant access.","inputSchema":{"type":"object","properties":{"site":{"type":"string"},"reason":{"type":"string","maxLength":1000},"requested_scope":{"type":"object","properties":{"method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE"]},"path":{"type":"string"},"operation":{"type":"string","enum":["query","write"]}},"required":["method","path","operation"]}},"required":["site","requested_scope"]}},
      {"name":"pm_request_status","description":"Read the pending, handled or cancelled state of your assistance request. Handled does not itself prove login or grant success.","inputSchema":{"type":"object","properties":{"req_id":{"type":"string"}},"required":["req_id"]}},
-     {"name":"pm_connection_status","description":"Read connection authentication state without secrets.","inputSchema":{"type":"object","properties":{"site":{"type":"string"}},"required":["site"]}}
+     {"name":"pm_connection_status","description":"Read connection authentication state without secrets.","inputSchema":{"type":"object","properties":{"site":{"type":"string"}},"required":["site"]}},
+     {"name":"pm_browser_open","description":"Open an independently authorized pman web session for a connection.","inputSchema":{"type":"object","properties":{"site":{"type":"string"}},"required":["site"]}},
+     {"name":"pm_browser_summary","description":"Read a sanitized page summary from a pman web session.","inputSchema":{"type":"object","properties":{"session_id":{"type":"string"}},"required":["session_id"]}},
+     {"name":"pm_browser_click","description":"Follow a same-origin navigation link. Buttons, form submissions, downloads and consequential actions are unsupported.","inputSchema":{"type":"object","properties":{"session_id":{"type":"string"},"selector":{"type":"string"}},"required":["session_id","selector"]}},
+     {"name":"pm_browser_fill","description":"Fill a non-sensitive field. Password, OTP, token and payment fields are always rejected.","inputSchema":{"type":"object","properties":{"session_id":{"type":"string"},"selector":{"type":"string"},"value":{"type":"string"}},"required":["session_id","selector","value"]}},
+     {"name":"pm_browser_wait","description":"Wait for a selector or visible text in a pman web session.","inputSchema":{"type":"object","properties":{"session_id":{"type":"string"},"selector":{"type":"string"},"text":{"type":"string"},"timeout_ms":{"type":"integer","minimum":0,"maximum":10000}},"required":["session_id"]}},
+     {"name":"pm_browser_close","description":"Close a pman web session.","inputSchema":{"type":"object","properties":{"session_id":{"type":"string"}},"required":["session_id"]}}
     ]})
 }
 fn mcp(client: Option<&str>) {
@@ -246,6 +252,12 @@ fn handle_rpc(client: Option<&str>, value: Value) -> Option<Value> {
                 "pm_request_login" => "request_login",
                 "pm_request_access" => "request_access",
                 "pm_request_status" => "request_status",
+                "pm_browser_open" => "browser_open",
+                "pm_browser_summary" => "browser_summary",
+                "pm_browser_click" => "browser_click",
+                "pm_browser_fill" => "browser_fill",
+                "pm_browser_wait" => "browser_wait",
+                "pm_browser_close" => "browser_close",
                 _ => "unsupported",
             };
             let args = if operation == "http" {
@@ -273,6 +285,8 @@ mod tests {
         assert!(!text.contains("pm_approve"));
         assert!(!text.contains("pm_unlock"));
         assert!(text.contains("pm_resolve_scenario"));
+        assert!(text.contains("pm_browser_open"));
+        assert!(text.contains("pm_browser_close"));
     }
     #[test]
     fn notification_has_no_reply() {
@@ -289,7 +303,7 @@ mod tests {
             "example",
             "call",
             "--site",
-            "E10 dev",
+            "Connection dev",
             "--method",
             "GET",
             "--path",

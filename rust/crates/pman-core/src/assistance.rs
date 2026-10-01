@@ -197,7 +197,7 @@ fn redact_reason(reason: &str, secrets: &[String]) -> String {
         reason = reason.replace(secret, crate::REDACTED);
     }
     if let Ok(pattern) = regex::Regex::new(
-        r"(?i)(bearer\s+|(?:password|passwd|token|cookie|eteamsid|session[_-]?id)\s*[:=]\s*)[^\s,;]+",
+        r"(?i)(bearer\s+|(?:password|passwd|token|cookie|session[_-]?id)\s*[:=]\s*)[^\s,;]+",
     ) {
         reason = pattern
             .replace_all(&reason, "$1***REDACTED***")

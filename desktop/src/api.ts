@@ -7,6 +7,7 @@ export type AuthType =
   | "http_basic"
   | "cookie_jar"
   | "login"
+  | "authflow"
   | "e10";
 export type EntryKind =
   | "password"
@@ -14,6 +15,7 @@ export type EntryKind =
   | "http_basic"
   | "cookie_jar"
   | "login"
+  | "authflow"
   | "e10";
 export type VaultStatus = {
   home: string;
@@ -44,7 +46,10 @@ export type SiteDetails = {
   check_path?: string | null;
   oauth_client_id?: string | null;
   oauth_scope?: string | null;
+  /** Microsoft tenant slot (organizations/consumers/common or tenant id). */
+  oauth_tenant?: string | null;
   web_enabled?: boolean;
+  extra?: Record<string, unknown>;
 };
 export type OAuthStart = {
   session_id: string;
@@ -190,6 +195,7 @@ export type LoginCapture = {
 export type AuthSession = {
   session_id: string;
   authorize_url: string;
+  user_code?: string;
   expires_at: string;
   origin: string;
 };
@@ -249,15 +255,16 @@ export function managementLocked(status: VaultStatus): boolean {
 }
 export function siteDetails(site: SiteSummary): SiteDetails {
   // Existing tags remain readable during metadata migration; new edits use details.
+  const tags = site.tags || [];
   const tag = (prefix: string) =>
-    site.tags
+    tags
       .find((value) => value.startsWith(`${prefix}:`))
       ?.slice(prefix.length + 1);
   return {
     group: tag("group"),
     account: tag("account"),
     environment: tag("env"),
-    favorite: site.tags.includes("favorite"),
+    favorite: tags.includes("favorite"),
     ...site.details,
   };
 }
@@ -270,13 +277,16 @@ export function typeLabel(type: string): string {
         http_basic: "HTTP Basic",
         cookie_jar: "Cookie",
         login: "网站登录",
-        e10: "E10",
+        authflow: "授权登录",
+        e10: "E10 快捷授权",
       } as Record<string, string>
     )[type] || type
   );
 }
 export function statusLabel(site: SiteSummary): { text: string; tone: string } {
-  const login = site.auth_type === "login" || site.auth_type === "e10";
+  const login = ["login", "authflow", "e10"].includes(site.auth_type);
+  if (siteDetails(site).extra?.oauth_pending === true)
+    return { text: "待 OAuth 登录", tone: "warning" };
   if (site.expires_at && Date.parse(site.expires_at) < Date.now())
     return { text: login ? "需重新登录" : "已过期", tone: "warning" };
   if (site.expires_at && Date.parse(site.expires_at) < Date.now() + 86400000)
@@ -294,7 +304,7 @@ export function statusLabel(site: SiteSummary): { text: string; tone: string } {
     revoked: { text: "已撤销", tone: "neutral" },
   };
   if (states[site.status]) return states[site.status];
-  if (site.auth_type === "login" || site.auth_type === "e10")
+  if (["login", "authflow", "e10"].includes(site.auth_type))
     return { text: "待检查", tone: "neutral" };
   return { text: "已保存", tone: "neutral" };
 }
@@ -323,7 +333,10 @@ export function errorText(error: unknown): string {
  * Text never contains credential material; unknown codes stay generic.
  */
 const errorCodeCatalog: Record<string, { text: string; action: string }> = {
-  not_paired: { text: "客户端未配对", action: "在 pman 桌面配对此 AI 客户端。" },
+  not_paired: {
+    text: "客户端未配对",
+    action: "在 pman 桌面配对此 AI 客户端。",
+  },
   harness_invalid: {
     text: "客户端已失效",
     action: "重新配对客户端后再授权。",
@@ -341,7 +354,10 @@ const errorCodeCatalog: Record<string, { text: string; action: string }> = {
   network_error: { text: "网络异常", action: "检查网络连接后重试。" },
   timeout: { text: "请求超时", action: "稍后重新检查。" },
   rate_limited: { text: "请求被限流", action: "等待限流窗口结束后重试。" },
-  service_paused: { text: "AI 服务已暂停", action: "在 pman 桌面恢复 AI 服务。" },
+  service_paused: {
+    text: "AI 服务已暂停",
+    action: "在 pman 桌面恢复 AI 服务。",
+  },
   vault_locked: { text: "服务未解锁", action: "在 pman 桌面恢复 AI 服务。" },
   management_locked: {
     text: "管理界面已锁定",
@@ -356,7 +372,10 @@ const errorCodeCatalog: Record<string, { text: string; action: string }> = {
     text: "权限不足(403)",
     action: "确认服务端账号权限；403 不一定是凭据过期。",
   },
-  invalid_response: { text: "响应无法识别", action: "重新检查；若持续出现请确认服务地址。" },
+  invalid_response: {
+    text: "响应无法识别",
+    action: "重新检查；若持续出现请确认服务地址。",
+  },
   response_blocked: {
     text: "响应疑似包含凭据，已阻止",
     action: "重新登录后再试。",
@@ -368,7 +387,10 @@ const errorCodeCatalog: Record<string, { text: string; action: string }> = {
   unknown_site: { text: "连接不存在", action: "刷新连接列表。" },
   site_inactive: { text: "连接已停用", action: "在连接管理中恢复连接。" },
   invalid_request: { text: "请求无效", action: "检查请求参数后重试。" },
-  request_failed: { text: "请求失败", action: "重新尝试；结果未知时不要盲目重试写操作。" },
+  request_failed: {
+    text: "请求失败",
+    action: "重新尝试；结果未知时不要盲目重试写操作。",
+  },
   account_mismatch: {
     text: "远端账号与连接不一致",
     action: "重新登录并确认账号。",

@@ -6,6 +6,7 @@ mod broker;
 pub mod browser;
 mod check;
 mod daemon;
+pub mod authflow;
 pub mod e10;
 mod http_proxy;
 pub mod ipc;

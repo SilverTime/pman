@@ -53,6 +53,10 @@ pub struct ConnectionDetails {
     pub oauth_client_id: Option<String>,
     /// OAuth scope request. Defaults to the provider's minimum read scope.
     pub oauth_scope: Option<String>,
+    /// Microsoft tenant slot (`organizations` / `consumers` / `common` or a
+    /// tenant id). Only read by the Microsoft provider; absent keeps the
+    /// `organizations` default. Serde default keeps old vaults compatible.
+    pub oauth_tenant: Option<String>,
     /// Independent browser capability (BROWSER-CONTRACT.md). Default false:
     /// existing API authorization never grants web access.
     pub web_enabled: bool,

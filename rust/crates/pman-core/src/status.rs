@@ -116,7 +116,7 @@ pub struct CheckEvidence {
     /// fingerprint marks the evidence stale; it never auto-refreshes grants.
     #[serde(default)]
     pub context: String,
-    /// Provider or check path, e.g. `github`, `gitlab`, `e10`, `custom:/path`.
+    /// Provider or check path, e.g. `github`, `gitlab`, `authflow`, `custom:/path`.
     #[serde(default)]
     pub provider: Option<String>,
     /// Redacted display identity from the remote, e.g. a login name.
@@ -130,7 +130,10 @@ pub struct CheckEvidence {
 impl Vault {
     /// Fingerprint of the account context. Check evidence bound to a previous
     /// context is stale and must not be displayed as current.
-    pub(crate) fn status_context_fingerprint(details: &crate::ConnectionDetails, site_url: &str) -> String {
+    pub(crate) fn status_context_fingerprint(
+        details: &crate::ConnectionDetails,
+        site_url: &str,
+    ) -> String {
         let canonical = format!(
             "{}|{}|{}|{}",
             site_url.trim_end_matches('/'),
@@ -163,10 +166,14 @@ impl Vault {
         mut evidence: CheckEvidence,
     ) -> Result<(), VaultError> {
         if !matches!(dimension, DIMENSION_IDENTITY | DIMENSION_API) {
-            return Err(VaultError::InvalidSchema("unsupported check dimension".into()));
+            return Err(VaultError::InvalidSchema(
+                "unsupported check dimension".into(),
+            ));
         }
         if evidence.state.is_empty() || evidence.checked_at.is_empty() {
-            return Err(VaultError::InvalidSchema("check evidence is incomplete".into()));
+            return Err(VaultError::InvalidSchema(
+                "check evidence is incomplete".into(),
+            ));
         }
         self.ensure_unlocked()?;
         evidence.context = self.current_fingerprint(alias)?;
@@ -175,11 +182,17 @@ impl Vault {
             details.extra = serde_json::json!({});
         }
         let object = details.extra.as_object_mut().expect("extra is object");
-        object.insert(format!("{dimension}_check"), serde_json::to_value(&evidence)?);
+        object.insert(
+            format!("{dimension}_check"),
+            serde_json::to_value(&evidence)?,
+        );
         if dimension == DIMENSION_IDENTITY {
             // Legacy consumers (bookshelf badges) read these keys.
             object.insert("status".into(), Value::String(evidence.state.clone()));
-            object.insert("checked_at".into(), Value::String(evidence.checked_at.clone()));
+            object.insert(
+                "checked_at".into(),
+                Value::String(evidence.checked_at.clone()),
+            );
         }
         self.conn.execute(
             "INSERT INTO connection_details(alias,details_json) VALUES(?,?) ON CONFLICT(alias) DO UPDATE SET details_json=excluded.details_json",
@@ -195,7 +208,7 @@ impl Vault {
             .and_then(|value| serde_json::from_value(value.clone()).ok())
     }
 
-    /// Legacy evidence written by earlier e10 checks before the contract existed.
+    /// Legacy evidence written by earlier authflow checks before the contract existed.
     fn legacy_identity_evidence(details: &crate::ConnectionDetails) -> Option<CheckEvidence> {
         let state = details.extra.get("status")?.as_str()?;
         if state.is_empty() {
@@ -266,6 +279,11 @@ fn compute_connection_status(
     let alias = &site.alias;
     let personal = site.auth_type == "password";
     let expired = crate::vault::is_expired(site.expires_at.as_deref());
+    let oauth_pending = details
+        .extra
+        .get("oauth_pending")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     // Dimension 1: credential storage. Always known from the vault itself.
     let credential = if personal {
@@ -275,6 +293,14 @@ fn compute_connection_status(
             "普通密码仅本人保管，不作为 AI 连接使用。",
         )
         .with_evidence("policy")
+    } else if oauth_pending {
+        DimensionStatus::new(
+            STATE_UNCHECKED,
+            "等待 OAuth 登录",
+            "连接资料已保存，但还没有取得可用令牌。完成登录后才能检查或授权 AI。",
+        )
+        .with_evidence("policy")
+        .recovery("继续 OAuth 登录")
     } else if site.status != "active" {
         DimensionStatus::new(STATE_INACTIVE, "已停用", "连接已停用，恢复后才能继续使用。")
             .with_evidence("policy")
@@ -282,7 +308,7 @@ fn compute_connection_status(
     } else if expired {
         DimensionStatus::new(
             STATE_EXPIRED,
-            if matches!(site.auth_type.as_str(), "login" | "e10") {
+            if matches!(site.auth_type.as_str(), "login" | "authflow" | "e10") {
                 "需重新登录"
             } else {
                 "凭据已过期"
@@ -310,9 +336,7 @@ fn compute_connection_status(
                 "还没有用远端只读接口验证过此账号身份。",
             )
             .with_evidence("policy"),
-            Some(evidence)
-                if evidence.context.is_empty() || evidence.context == fingerprint =>
-            {
+            Some(evidence) if evidence.context.is_empty() || evidence.context == fingerprint => {
                 identity_from_evidence(&evidence)
             }
             Some(evidence) => DimensionStatus::new(
@@ -327,8 +351,7 @@ fn compute_connection_status(
     };
 
     // Dimension 3: API capability through the local proxy.
-    let (active_clients, invalid_clients, restricted) =
-        grant_summary(alias, harnesses, clients);
+    let (active_clients, invalid_clients, restricted) = grant_summary(alias, harnesses, clients);
     let api = if personal {
         DimensionStatus::new(STATE_NOT_AVAILABLE, "不开放", "普通密码不向 AI 开放。")
             .with_evidence("policy")
@@ -473,96 +496,99 @@ fn compute_connection_status(
     }
 }
 
-    /// Count active/invalid harness grants for a connection and whether any
-    /// explicit restriction (deny rule or approval requirement) still applies.
-    /// A harness counts as active only when it can actually authenticate:
-    /// legacy token harnesses have no paired client, revoked or expired
-    /// pairings invalidate the grant even though the profile row remains.
-    /// Returns (active, invalid, restricted).
-    fn grant_summary(
-        alias: &str,
-        harnesses: &[crate::HarnessSummary],
-        clients: &[crate::ClientSummary],
-    ) -> (usize, usize, bool) {
-        let mut active = 0;
-        let mut invalid = 0;
-        let mut restricted = false;
-        for profile in harnesses {
-            let Ok(policy) = crate::Policy::from_json(&profile.policy) else {
-                continue;
-            };
-            let covers = policy.default_action == crate::DefaultAction::Allow
-                || policy.allow.iter().any(|rule| {
-                    rule.site == alias && !crate::vault::is_expired(rule.expires_at.as_deref())
-                });
-            if !covers {
-                continue;
-            }
-            let profile_valid = profile.revoked_at.is_none()
-                && !crate::vault::is_expired(profile.expires_at.as_deref());
-            let identities: Vec<_> = clients
-                .iter()
-                .filter(|client| client.harness == profile.name)
-                .collect();
-            let identity_valid = if identities.is_empty() {
-                // Legacy token identity; revocation lives on the harness row.
-                profile_valid
-            } else {
-                identities.iter().any(|client| {
-                    client.paired
-                        && client.revoked_at.is_none()
-                        && !crate::vault::is_expired(client.expires_at.as_deref())
-                })
-            };
-            if !profile_valid || !identity_valid {
-                invalid += 1;
-                continue;
-            }
-            active += 1;
-            if policy.deny.iter().any(|rule| {
-                rule.site == alias || rule.site == "*"
-            }) || policy
+/// Count active/invalid harness grants for a connection and whether any
+/// explicit restriction (deny rule or approval requirement) still applies.
+/// A harness counts as active only when it can actually authenticate:
+/// legacy token harnesses have no paired client, revoked or expired
+/// pairings invalidate the grant even though the profile row remains.
+/// Returns (active, invalid, restricted).
+fn grant_summary(
+    alias: &str,
+    harnesses: &[crate::HarnessSummary],
+    clients: &[crate::ClientSummary],
+) -> (usize, usize, bool) {
+    let mut active = 0;
+    let mut invalid = 0;
+    let mut restricted = false;
+    for profile in harnesses {
+        let Ok(policy) = crate::Policy::from_json(&profile.policy) else {
+            continue;
+        };
+        let covers = policy.default_action == crate::DefaultAction::Allow
+            || policy.allow.iter().any(|rule| {
+                rule.site == alias && !crate::vault::is_expired(rule.expires_at.as_deref())
+            });
+        if !covers {
+            continue;
+        }
+        let profile_valid = profile.revoked_at.is_none()
+            && !crate::vault::is_expired(profile.expires_at.as_deref());
+        let identities: Vec<_> = clients
+            .iter()
+            .filter(|client| client.harness == profile.name)
+            .collect();
+        let identity_valid = if identities.is_empty() {
+            // Legacy token identity; revocation lives on the harness row.
+            profile_valid
+        } else {
+            identities.iter().any(|client| {
+                client.paired
+                    && client.revoked_at.is_none()
+                    && !crate::vault::is_expired(client.expires_at.as_deref())
+            })
+        };
+        if !profile_valid || !identity_valid {
+            invalid += 1;
+            continue;
+        }
+        active += 1;
+        if policy
+            .deny
+            .iter()
+            .any(|rule| rule.site == alias || rule.site == "*")
+            || policy
                 .allow
                 .iter()
                 .any(|rule| rule.site == alias && rule.require_approval == Some(true))
-                || !policy.approval.required_for.is_empty()
-            {
-                restricted = true;
-            }
+            || !policy.approval.required_for.is_empty()
+        {
+            restricted = true;
         }
-        (active, invalid, restricted)
     }
+    (active, invalid, restricted)
+}
 
-    /// Last real AI usage from the audit log. CLI self-checks never write
-    /// business-shaped entries, so this is genuine usage evidence, not a
-    /// substitute for the identity check.
-    fn last_usage_evidence(alias: &str, audit: &[crate::AuditEntry]) -> Option<DimensionStatus> {
-        let entry = audit
-            .iter()
-            .find(|entry| entry.site.as_deref() == Some(alias) && entry.status_code.is_some())?;
-        let status_code = u16::try_from(entry.status_code?).ok()?;
-        let checked_at = entry.ts.clone();
-        let detail = format!(
-            "最近真实 AI 调用（{} {}）返回 {}。",
-            entry.method.as_deref().unwrap_or("?"),
-            entry.path.as_deref().unwrap_or("/"),
-            status_code
-        );
-        Some(match status_code {
-            200..=399 => DimensionStatus::new(STATE_READY, "最近调用正常", detail).checked(checked_at),
-            401 => DimensionStatus::new(STATE_UNAUTHORIZED, "最近调用被拒绝(401)", detail)
-                .checked(checked_at)
-                .errored("session_expired", "重新登录或更新凭据"),
-            403 => DimensionStatus::new(STATE_FORBIDDEN, "最近调用权限不足(403)", detail)
-                .checked(checked_at)
-                .errored("explicit_deny", "确认服务端账号权限，403 不一定是凭据过期"),
-            429 => DimensionStatus::new(STATE_RATE_LIMITED, "最近调用被限流(429)", detail)
-                .checked(checked_at)
-                .errored("rate_limited", "稍后重试"),
-            _ => DimensionStatus::new(STATE_INVALID_RESPONSE, "最近调用异常", detail)
-                .checked(checked_at),
-        })
-    }
+/// Last real AI usage from the audit log. CLI self-checks never write
+/// business-shaped entries, so this is genuine usage evidence, not a
+/// substitute for the identity check.
+fn last_usage_evidence(alias: &str, audit: &[crate::AuditEntry]) -> Option<DimensionStatus> {
+    let entry = audit
+        .iter()
+        .find(|entry| entry.site.as_deref() == Some(alias) && entry.status_code.is_some())?;
+    let status_code = u16::try_from(entry.status_code?).ok()?;
+    let checked_at = entry.ts.clone();
+    let detail = format!(
+        "最近真实 AI 调用（{} {}）返回 {}。",
+        entry.method.as_deref().unwrap_or("?"),
+        entry.path.as_deref().unwrap_or("/"),
+        status_code
+    );
+    Some(match status_code {
+        200..=399 => DimensionStatus::new(STATE_READY, "最近调用正常", detail).checked(checked_at),
+        401 => DimensionStatus::new(STATE_UNAUTHORIZED, "最近调用被拒绝(401)", detail)
+            .checked(checked_at)
+            .errored("session_expired", "重新登录或更新凭据"),
+        403 => DimensionStatus::new(STATE_FORBIDDEN, "最近调用权限不足(403)", detail)
+            .checked(checked_at)
+            .errored("explicit_deny", "确认服务端账号权限，403 不一定是凭据过期"),
+        429 => DimensionStatus::new(STATE_RATE_LIMITED, "最近调用被限流(429)", detail)
+            .checked(checked_at)
+            .errored("rate_limited", "稍后重试"),
+        _ => {
+            DimensionStatus::new(STATE_INVALID_RESPONSE, "最近调用异常", detail).checked(checked_at)
+        }
+    })
+}
 
 fn identity_from_evidence(evidence: &CheckEvidence) -> DimensionStatus {
     let mut status = match evidence.state.as_str() {
@@ -577,22 +603,20 @@ fn identity_from_evidence(evidence: &CheckEvidence) -> DimensionStatus {
             }
             status
         }
-        "expired" | "session_expired" => DimensionStatus::new(
-            STATE_EXPIRED,
-            "会话已过期",
-            "远端会话或令牌已失效。",
-        ),
-        "unauthorized" => DimensionStatus::new(
-            STATE_UNAUTHORIZED,
-            "身份验证失败(401)",
-            "远端拒绝此凭据。",
-        ),
+        "expired" | "session_expired" => {
+            DimensionStatus::new(STATE_EXPIRED, "会话已过期", "远端会话或令牌已失效。")
+        }
+        "unauthorized" => {
+            DimensionStatus::new(STATE_UNAUTHORIZED, "身份验证失败(401)", "远端拒绝此凭据。")
+        }
         "forbidden" => DimensionStatus::new(
             STATE_FORBIDDEN,
             "权限不足(403)",
             "凭据有效，但此账号没有访问该接口的权限。",
         ),
-        "rate_limited" => DimensionStatus::new(STATE_RATE_LIMITED, "被限流(429)", "检查请求被限流。"),
+        "rate_limited" => {
+            DimensionStatus::new(STATE_RATE_LIMITED, "被限流(429)", "检查请求被限流。")
+        }
         "timeout" => DimensionStatus::new(STATE_TIMEOUT, "检查超时", "远端在时限内未返回。"),
         "network_error" => DimensionStatus::new(
             STATE_NETWORK_ERROR,
@@ -652,7 +676,9 @@ fn api_from_evidence(evidence: &CheckEvidence) -> DimensionStatus {
             "权限不足(403)",
             "远端返回 403；这不代表凭据过期，可能是账号权限不足。",
         ),
-        "rate_limited" => DimensionStatus::new(STATE_RATE_LIMITED, "被限流(429)", "检查请求被限流。"),
+        "rate_limited" => {
+            DimensionStatus::new(STATE_RATE_LIMITED, "被限流(429)", "检查请求被限流。")
+        }
         "timeout" => DimensionStatus::new(STATE_TIMEOUT, "检查超时", "远端在时限内未返回。"),
         "network_error" => DimensionStatus::new(
             STATE_NETWORK_ERROR,
@@ -751,6 +777,18 @@ mod tests {
     }
 
     #[test]
+    fn oauth_placeholder_is_reported_as_waiting_for_login_not_as_a_saved_credential() {
+        let (_temp, mut vault, _address) = vault_with_connection();
+        vault
+            .update_details("api", json!({"extra":{"oauth_pending":true}}))
+            .unwrap();
+        let status = vault.connection_status("api").unwrap();
+        assert_eq!(status.credential.state, STATE_UNCHECKED);
+        assert_eq!(status.credential.label, "等待 OAuth 登录");
+        assert_eq!(status.credential.recovery, Some("继续 OAuth 登录".into()));
+    }
+
+    #[test]
     fn proxy_reached_but_remote_401_is_distinct_from_unchecked() {
         let (_temp, mut vault, _address) = vault_with_connection();
         grant_client(&mut vault, "client-one");
@@ -807,7 +845,10 @@ mod tests {
             .unwrap();
         let status = vault.connection_status("api").unwrap();
         assert_eq!(status.identity.state, STATE_STALE);
-        assert_eq!(status.identity.error_code, Some("account_context_changed".into()));
+        assert_eq!(
+            status.identity.error_code,
+            Some("account_context_changed".into())
+        );
     }
 
     #[test]
@@ -928,36 +969,38 @@ mod tests {
             .unwrap();
         let status = vault.connection_status("api").unwrap();
         assert_eq!(
-            status.identity.state,
-            STATE_UNCHECKED,
+            status.identity.state, STATE_UNCHECKED,
             "更换凭据后旧身份证据必须清除"
         );
         assert_eq!(status.identity.label, "尚未检查");
     }
 
     #[test]
-    fn legacy_e10_evidence_is_readable_through_the_contract() {
+    fn legacy_authflow_evidence_is_readable_through_the_contract() {
         let temp = tempfile::tempdir().unwrap();
         let mut vault = Vault::open(temp.path()).unwrap();
         vault.create("synthetic-password").unwrap();
         vault
             .add_site(crate::SiteInput::new(
-                "e10",
-                "https://e10.example",
-                "e10",
-                json!({"eteamsid":"synthetic-only"}),
+                "authflow",
+                "https://authflow.example",
+                "login",
+                json!({"session_value":"synthetic-only"}),
             ))
             .unwrap();
         // Write only the legacy keys, as the previous version did.
         vault
             .update_details(
-                "e10",
+                "authflow",
                 json!({"extra":{"status":"connected","checked_at":"2026-09-19T09:00:00"}}),
             )
             .unwrap();
-        let status = vault.connection_status("e10").unwrap();
+        let status = vault.connection_status("authflow").unwrap();
         assert_eq!(status.identity.state, STATE_VERIFIED);
-        assert_eq!(status.identity.checked_at, Some("2026-09-19T09:00:00".into()));
+        assert_eq!(
+            status.identity.checked_at,
+            Some("2026-09-19T09:00:00".into())
+        );
         assert_eq!(status.identity.evidence, Some("check".into()));
     }
 

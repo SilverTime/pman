@@ -67,7 +67,7 @@ export function connectionAbility(site: SiteSummary) {
       tone: "success",
       detail: "账号验证已通过；具体操作仍受服务端权限限制。",
     };
-  if (site.auth_type === "login")
+  if (["login", "e10"].includes(site.auth_type))
     return {
       text: "会话已保存",
       tone: "neutral",
@@ -86,15 +86,33 @@ export function connectionHost(site: SiteSummary) {
     return "本机保存";
   }
 }
+/** OAuth-capable preset providers. Gitee is deliberately absent: it is a
+ * token-only provider (its official exchange requires a client secret). */
+export type ConnectionProvider =
+  | "github"
+  | "gitlab"
+  | "microsoft"
+  | "google"
+  | "e10";
 /** Mirrors the native provider detection in check.rs / oauth_login.rs. */
-export function connectionProvider(site: SiteSummary): "github" | "gitlab" | null {
+export function connectionProvider(site: SiteSummary): ConnectionProvider | null {
   const details = siteDetails(site);
-  if (details.provider === "github" || details.provider === "gitlab")
+  if (site.auth_type === "e10" || details.provider === "e10") return "e10";
+  if (
+    details.provider === "github" ||
+    details.provider === "gitlab" ||
+    details.provider === "microsoft" ||
+    details.provider === "google"
+  )
     return details.provider;
   try {
     const host = new URL(site.site_url).hostname.toLowerCase();
     if (host === "api.github.com") return "github";
-    if (host === "gitlab.com" || host.endsWith(".gitlab.com")) return "gitlab";
+    if (host === "gitlab.com" || host === "www.gitlab.com" || host.endsWith(".gitlab.com"))
+      return "gitlab";
+    if (host === "graph.microsoft.com") return "microsoft";
+    if (host === "www.googleapis.com" || host.endsWith(".googleapis.com"))
+      return "google";
   } catch {
     return null;
   }

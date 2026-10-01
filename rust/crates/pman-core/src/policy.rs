@@ -421,7 +421,7 @@ fn default_strip_headers() -> Vec<String> {
         "proxy-authorization",
         "x-api-key",
         "x-auth-token",
-        "eteamsid",
+        "session_value",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -437,7 +437,7 @@ fn default_json_keys() -> Vec<String> {
         "cookie",
         "authorization",
         "api_key",
-        "eteamsid",
+        "session_value",
         "session_id",
         "sessionid",
     ]

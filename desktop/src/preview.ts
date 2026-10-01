@@ -21,12 +21,23 @@ const dim = (
 ): DimensionStatus => ({ state, label, detail, ...extra });
 
 /** Synthetic status dimensions so the preview shows the contract honestly. */
-const status = (alias: string, patch: Partial<ConnectionStatus>): ConnectionStatus => ({
+const status = (
+  alias: string,
+  patch: Partial<ConnectionStatus>,
+): ConnectionStatus => ({
   alias,
   credential: dim("saved", "已保存", "凭据已加密保存在本机保险库。"),
-  identity: dim("unchecked", "尚未检查", "还没有用远端只读接口验证过此账号身份。"),
-  api: dim("not_granted", "未授权 AI", "还没有任何 AI 客户端被允许使用此连接。"),
-  web: dim("not_available", "尚未接入", "AI 网页操作通道尚未提供；已保存的登录会话仅供接口调用。"),
+  identity: dim(
+    "unchecked",
+    "尚未检查",
+    "还没有用远端只读接口验证过此账号身份。",
+  ),
+  api: dim(
+    "not_granted",
+    "未授权 AI",
+    "还没有任何 AI 客户端被允许使用此连接。",
+  ),
+  web: dim("off", "未开启", "网页操作默认关闭，需要单独开启并授权给指定 AI。"),
   clients: dim("none", "未授权", "没有客户端被允许使用此连接。"),
   ...patch,
 });
@@ -75,8 +86,16 @@ export const previewData: {
       last_used_at: date,
       status: "active",
       dimensions: status("github", {
-        api: dim("unchecked", "尚未检查", "已授权，但还没有通过本机代理验证或真实调用记录。"),
-        clients: dim("granted", "1 个客户端已授权", "授权持续到撤销；拒绝规则继续生效。"),
+        api: dim(
+          "unchecked",
+          "尚未检查",
+          "已授权，但还没有通过本机代理验证或真实调用记录。",
+        ),
+        clients: dim(
+          "granted",
+          "1 个客户端已授权",
+          "授权持续到撤销；拒绝规则继续生效。",
+        ),
       }),
     },
     {
@@ -100,12 +119,12 @@ export const previewData: {
       }),
     },
     {
-      id: "sample-e10",
-      alias: "e10-test",
-      name: "E10 测试环境",
-      site_url: "https://e10.example.test",
-      auth_type: "e10",
-      purpose: "前端调试与国际化接口。",
+      id: "sample-authflow",
+      alias: "authflow-test",
+      name: "办公系统测试环境",
+      site_url: "https://authflow.example.test",
+      auth_type: "authflow",
+      purpose: "工作系统接口。",
       tags: [],
       details: {
         account: "developer@example.test",
@@ -120,14 +139,28 @@ export const previewData: {
       last_used_at: date,
       last_checked_at: date,
       status: "connected",
-      dimensions: status("e10-test", {
-        identity: dim("verified", "身份已验证", "远端确认账号身份：developer@example.test。", {
-          checked_at: date,
-        }),
-        api: dim("ready", "本机检查通过", "通过本机代理的只读检查请求成功返回。", {
-          checked_at: date,
-        }),
-        clients: dim("granted", "1 个客户端已授权", "授权持续到撤销；拒绝规则继续生效。"),
+      dimensions: status("authflow-test", {
+        identity: dim(
+          "verified",
+          "身份已验证",
+          "远端确认账号身份：developer@example.test。",
+          {
+            checked_at: date,
+          },
+        ),
+        api: dim(
+          "ready",
+          "本机检查通过",
+          "通过本机代理的只读检查请求成功返回。",
+          {
+            checked_at: date,
+          },
+        ),
+        clients: dim(
+          "granted",
+          "1 个客户端已授权",
+          "授权持续到撤销；拒绝规则继续生效。",
+        ),
       }),
     },
     {
@@ -149,10 +182,19 @@ export const previewData: {
       last_used_at: date,
       status: "active",
       dimensions: status("gitlab", {
-        api: dim("ready", "最近调用正常", "最近真实 AI 调用（GET /api/v4/projects）返回 200。", {
-          checked_at: date,
-        }),
-        clients: dim("granted", "1 个客户端已授权", "授权持续到撤销；拒绝规则继续生效。"),
+        api: dim(
+          "ready",
+          "最近调用正常",
+          "最近真实 AI 调用（GET /api/v4/projects）返回 200。",
+          {
+            checked_at: date,
+          },
+        ),
+        clients: dim(
+          "granted",
+          "1 个客户端已授权",
+          "授权持续到撤销；拒绝规则继续生效。",
+        ),
       }),
     },
     {
@@ -179,10 +221,10 @@ export const previewData: {
     },
     {
       id: "sample-prod",
-      alias: "e10-prod",
-      name: "E10 生产环境",
+      alias: "authflow-prod",
+      name: "办公系统生产环境",
       site_url: "https://production.example.test",
-      auth_type: "e10",
+      auth_type: "authflow",
       tags: [],
       details: {
         account: "developer@example.test",
@@ -193,7 +235,7 @@ export const previewData: {
       created_at: date,
       updated_at: date,
       status: "expired",
-      dimensions: status("e10-prod", {
+      dimensions: status("authflow-prod", {
         credential: dim(
           "expired",
           "需重新登录",
@@ -244,7 +286,7 @@ export const previewData: {
             require_approval: false,
           },
           {
-            site: "e10-test",
+            site: "authflow-test",
             methods: ["GET"],
             paths: ["/api/ebuilder/**"],
             operation: "query",
@@ -282,7 +324,7 @@ export const previewData: {
       id: "sample-request",
       ts: date,
       harness: "codex",
-      site: "e10-test",
+      site: "authflow-test",
       method: "POST",
       path: "/api/ebuilder/label",
       payload: { body: { label: "示例词条" } },
@@ -307,7 +349,7 @@ export const previewData: {
       id: 2,
       ts: date,
       harness: "codex",
-      site: "e10-test",
+      site: "authflow-test",
       method: "POST",
       path: "/api/ebuilder/label",
       status_code: 403,

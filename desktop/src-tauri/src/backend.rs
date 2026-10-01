@@ -776,12 +776,8 @@ pub async fn connection_check(
         core.vault
             .finish_connection_check(&alias, &outcome)
             .map_err(safe_error)?;
-        serde_json::to_value(
-            core.vault
-                .connection_status(&alias)
-                .map_err(safe_error)?,
-        )
-        .map_err(safe_error)?
+        serde_json::to_value(core.vault.connection_status(&alias).map_err(safe_error)?)
+            .map_err(safe_error)?
     };
     let _ = window.app_handle().emit("connections-changed", ());
     Ok(json!({"outcome": outcome, "dimensions": response}))
@@ -893,7 +889,9 @@ pub fn web_enable(
 ) -> Result<(), String> {
     let _guard = admin(&window, &state)?;
     let mut core = state.core.lock().map_err(|_| "服务状态不可用")?;
-    core.vault.set_web_enabled(&alias, enabled).map_err(safe_error)?;
+    core.vault
+        .set_web_enabled(&alias, enabled)
+        .map_err(safe_error)?;
     if !enabled {
         drop(core);
         state.close_web_session_windows(state.web_sessions.close_for_site(&alias));
@@ -948,12 +946,11 @@ pub async fn client_handshake(
     if client["revoked_at"].is_string() {
         return Err("此客户端已撤销，请重新配对".into());
     }
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        ipc::call(&id, "handshake", json!({}))
-    })
-    .await
-    .map_err(|_| "握手检查失败")?
-    .map_err(|_| "原生代理连接失败，请检查配对和服务状态")?;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || ipc::call(&id, "handshake", json!({})))
+            .await
+            .map_err(|_| "握手检查失败")?
+            .map_err(|_| "原生代理连接失败，请检查配对和服务状态")?;
     state.require_management()?;
     Ok(json!({
         "ok": result["ok"] == true,

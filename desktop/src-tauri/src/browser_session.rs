@@ -41,9 +41,11 @@ fn audit_web(shared: &Shared, harness: &str, site: &str, action: &str, ok: bool,
 pub fn dispatch_web(shared: &Shared, request: &IpcRequest, harness: &str) -> Value {
     match request.operation.as_str() {
         "browser_open" => web_open(shared, request, harness),
-        "browser_summary" => with_session(shared, request, harness, "summary", |shared, session| {
-            web_summary(shared, &session)
-        }),
+        "browser_summary" => {
+            with_session(shared, request, harness, "summary", |shared, session| {
+                web_summary(shared, &session)
+            })
+        }
         "browser_click" => with_session(shared, request, harness, "click", |shared, session| {
             web_click(shared, &session, &request.args)
         }),
@@ -81,9 +83,10 @@ fn authorize(
     action: &str,
     origin: Option<&str>,
 ) -> Result<String, Value> {
-    let core = shared.core.lock().map_err(|_| {
-        web_error("request_failed", "服务状态不可用")
-    })?;
+    let core = shared
+        .core
+        .lock()
+        .map_err(|_| web_error("request_failed", "服务状态不可用"))?;
     let site_url = core
         .vault
         .authorize_web_action(harness, alias, action, origin)
@@ -95,7 +98,9 @@ fn authorize(
                     WebAuthError::NotAuthorized => "此客户端没有被授权执行该网页动作",
                     WebAuthError::OriginDenied => "目标 origin 不在网页授权范围内",
                     WebAuthError::SessionUnknown => "网页会话不存在或已关闭",
-                    WebAuthError::Unsupported => "该网页动作不存在（文件上传/下载、支付/删除/发布、任意脚本等一律不支持）",
+                    WebAuthError::Unsupported => {
+                        "该网页动作不存在（文件上传/下载、支付/删除/发布、任意脚本等一律不支持）"
+                    }
                 },
             )
         })?;
@@ -104,13 +109,40 @@ fn authorize(
 }
 
 fn web_open(shared: &Shared, request: &IpcRequest, harness: &str) -> Value {
-    let alias = resolve_alias(request.args.get("site").and_then(Value::as_str).unwrap_or(""));
+    let alias = resolve_alias(
+        request
+            .args
+            .get("site")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+    );
     if alias.is_empty() {
         return web_error("invalid_request", "缺少连接别名");
     }
     let site_url = match authorize(shared, harness, &alias, "open", None) {
         Ok(url) => url,
         Err(error) => return error,
+    };
+    let (site_id, allowed_origin) = {
+        let core = match shared.core.lock() {
+            Ok(core) => core,
+            Err(_) => return web_error("request_failed", "服务状态不可用"),
+        };
+        let site_id = match core
+            .vault
+            .list_sites()
+            .ok()
+            .and_then(|sites| sites.into_iter().find(|site| site.alias == alias))
+            .map(|site| site.id)
+        {
+            Some(site_id) => site_id,
+            None => return web_error("web_session_unknown", "连接不存在"),
+        };
+        let origin = match core.vault.web_session_origin(&alias) {
+            Ok(origin) => origin,
+            Err(error) => return web_error(error.code(), "连接地址不能用于网页会话"),
+        };
+        (site_id, origin)
     };
     let session_id = uuid::Uuid::new_v4().simple().to_string();
     let window_label = format!("web-session-{session_id}");
@@ -126,13 +158,12 @@ fn web_open(shared: &Shared, request: &IpcRequest, harness: &str) -> Value {
         client_id: request.client_id.clone(),
         harness: harness.to_owned(),
         site: alias.clone(),
-        origin: site_url.clone(),
+        origin: allowed_origin.clone(),
         window_label: window_label.clone(),
         generation,
         created_at: chrono::Utc::now().to_rfc3339(),
-        expires_at: (chrono::Utc::now()
-            + chrono::Duration::minutes(SESSION_LIFETIME_MINUTES))
-        .to_rfc3339(),
+        expires_at: (chrono::Utc::now() + chrono::Duration::minutes(SESSION_LIFETIME_MINUTES))
+            .to_rfc3339(),
     };
     shared.web_sessions.open(session);
     // The window is created through the app handle on the main thread.
@@ -140,12 +171,22 @@ fn web_open(shared: &Shared, request: &IpcRequest, harness: &str) -> Value {
         let app = app.clone();
         let url = site_url.clone();
         let label = window_label.clone();
+        let navigation_origin = allowed_origin.clone();
+        let profile = shared.home.join("login-profiles").join(site_id);
         let built = tauri::WebviewWindowBuilder::new(
             &app,
             &label,
-            tauri::WebviewUrl::External(url.parse().unwrap_or_else(|_| "about:blank".parse().unwrap())),
+            tauri::WebviewUrl::External(
+                url.parse()
+                    .unwrap_or_else(|_| "about:blank".parse().unwrap()),
+            ),
         )
         .title(format!("pman 网页会话 · {alias}"))
+        .data_directory(profile)
+        .on_navigation(move |url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.origin().ascii_serialization() == navigation_origin
+        })
         .visible(true)
         .build();
         if built.is_err() {
@@ -162,7 +203,7 @@ fn web_open(shared: &Shared, request: &IpcRequest, harness: &str) -> Value {
     audit_web(shared, harness, &alias, "open", true, "网页会话已打开");
     pman_core::ipc::result_ok(json!({
         "session_id": session_id,
-        "origin": site_url,
+        "origin": allowed_origin,
         "expires_at": session_expires_at(shared, &session_id),
     }))
 }
@@ -176,7 +217,13 @@ fn session_expires_at(shared: &Shared, session_id: &str) -> Value {
 }
 
 /// Loads and validates the session, then runs the action closure with it.
-fn with_session<F>(shared: &Shared, request: &IpcRequest, harness: &str, action: &str, run: F) -> Value
+fn with_session<F>(
+    shared: &Shared,
+    request: &IpcRequest,
+    harness: &str,
+    action: &str,
+    run: F,
+) -> Value
 where
     F: FnOnce(&Shared, &WebSession) -> Value,
 {
@@ -217,7 +264,13 @@ where
         );
     }
     // Re-check the connection + capability + grant for every action.
-    if let Err(error) = authorize(shared, harness, &session.site, action, Some(&session.origin)) {
+    if let Err(error) = authorize(
+        shared,
+        harness,
+        &session.site,
+        action,
+        Some(&session.origin),
+    ) {
         return error;
     }
     run(shared, &session)
@@ -262,21 +315,19 @@ fn execute_script(shared: &Shared, session: &WebSession, script: &str) -> Result
                 // The webview2-com macro converts the raw COM arguments:
                 // (HRESULT, PCWSTR) becomes (Result<()>, String).
                 let tx_callback = tx.clone();
-                let handler = webview2_com::ExecuteScriptCompletedHandler::create(
-                    Box::new(
-                        move |error_code: windows::core::Result<()>, result: String| {
-                            if error_code.is_ok() {
-                                let _ = tx_callback.send(Ok(result));
-                            } else {
-                                let _ = tx_callback.send(Err("script execution failed".into()));
-                            }
-                            Ok(())
-                        },
-                    ),
-                );
-                if let Err(error) = unsafe {
-                    webview2.ExecuteScript(PCWSTR::from_raw(script_h.as_ptr()), &handler)
-                } {
+                let handler = webview2_com::ExecuteScriptCompletedHandler::create(Box::new(
+                    move |error_code: windows::core::Result<()>, result: String| {
+                        if error_code.is_ok() {
+                            let _ = tx_callback.send(Ok(result));
+                        } else {
+                            let _ = tx_callback.send(Err("script execution failed".into()));
+                        }
+                        Ok(())
+                    },
+                ));
+                if let Err(error) =
+                    unsafe { webview2.ExecuteScript(PCWSTR::from_raw(script_h.as_ptr()), &handler) }
+                {
                     let _ = tx.send(Err(format!("execute failed: {error}")));
                 }
             }
@@ -303,9 +354,9 @@ fn current_origin(shared: &Shared, session: &WebSession) -> Result<String, Value
             shared.web_sessions.close(&session.session_id);
             web_error("web_session_unknown", "会话窗口已关闭")
         })?;
-    let url = window.url().map_err(|_| {
-        web_error("request_failed", "无法读取会话页面地址")
-    })?;
+    let url = window
+        .url()
+        .map_err(|_| web_error("request_failed", "无法读取会话页面地址"))?;
     Ok(url.origin().ascii_serialization())
 }
 
@@ -348,12 +399,18 @@ fn web_summary(shared: &Shared, session: &WebSession) -> Value {
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let input_type = field.get("type").and_then(Value::as_str).unwrap_or_default();
+            let input_type = field
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let autocomplete = field
                 .get("autocomplete")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let label = field.get("label").and_then(Value::as_str).unwrap_or_default();
+            let label = field
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             if is_sensitive_field(&format!("{name} {label}"), input_type, autocomplete) {
                 if let Some(object) = field.as_object_mut() {
                     if object.get("value").and_then(Value::as_str).is_some() {
@@ -386,7 +443,14 @@ fn web_summary(shared: &Shared, session: &WebSession) -> Value {
                     &secret,
                     &site,
                 ) {
-                    audit_web(shared, &session.harness, &session.site, "summary", false, "响应包含凭据，已阻止");
+                    audit_web(
+                        shared,
+                        &session.harness,
+                        &session.site,
+                        "summary",
+                        false,
+                        "响应包含凭据，已阻止",
+                    );
                     return web_error(
                         "web_response_blocked",
                         "页面内容疑似包含凭据，整个摘要已阻止返回",
@@ -396,7 +460,14 @@ fn web_summary(shared: &Shared, session: &WebSession) -> Value {
             _ => return web_error("request_failed", "无法校验会话凭据"),
         }
     }
-    audit_web(shared, &session.harness, &session.site, "summary", true, &format!("页面摘要完成，脱敏 {redactions} 个字段"));
+    audit_web(
+        shared,
+        &session.harness,
+        &session.site,
+        "summary",
+        true,
+        &format!("页面摘要完成，脱敏 {redactions} 个字段"),
+    );
     pman_core::ipc::result_ok(json!({"summary": summary, "origin": origin}))
 }
 
@@ -410,12 +481,34 @@ fn web_click(shared: &Shared, session: &WebSession, args: &Value) -> Value {
     if selector.len() > 512 || selector.contains("javascript:") {
         return web_error("invalid_request", "选择器无效");
     }
-    let args_json = json!({"selector": selector, "text": args.get("text").and_then(Value::as_str).unwrap_or("")});
+    let args_json = json!({"selector": selector, "origin": session.origin});
     let script = format!(r#"(() => {{ const args = {args_json}; {CLICK_BODY} }})()"#);
     match execute_script(shared, session, &script) {
         Ok(raw) => {
-            audit_web(shared, &session.harness, &session.site, "click", true, "已点击元素");
-            pman_core::ipc::result_ok(json!({"ok": true, "result": raw_result(&raw)}))
+            let result = raw_result(&raw);
+            if result.get("blocked").and_then(Value::as_bool) == Some(true) {
+                audit_web(
+                    shared,
+                    &session.harness,
+                    &session.site,
+                    "click",
+                    false,
+                    "非导航点击已阻止",
+                );
+                return web_error(
+                    "web_action_unsupported",
+                    "第一版仅支持同站点导航链接；按钮、表单提交、下载及可能产生业务副作用的点击均不支持",
+                );
+            }
+            audit_web(
+                shared,
+                &session.harness,
+                &session.site,
+                "click",
+                true,
+                "已点击元素",
+            );
+            pman_core::ipc::result_ok(json!({"ok": true, "result": result}))
         }
         Err(error) => web_error("request_failed", &error),
     }
@@ -439,10 +532,7 @@ fn web_fill(shared: &Shared, session: &WebSession, args: &Value) -> Value {
     if value.len() > 8192 {
         return web_error("invalid_request", "填充内容过长");
     }
-    let secret_fill = args
-        .get("secret")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let secret_fill = args.get("secret").and_then(Value::as_bool).unwrap_or(false);
     if secret_fill {
         // The contract: secret fills are performed by the user in the isolated
         // login window, not by the AI. Relay the instruction honestly.
@@ -455,6 +545,21 @@ fn web_fill(shared: &Shared, session: &WebSession, args: &Value) -> Value {
     let script = format!(r#"(() => {{ const args = {args_json}; {FILL_BODY} }})()"#);
     match execute_script(shared, session, &script) {
         Ok(raw) => {
+            let result = raw_result(&raw);
+            if result.get("blocked").and_then(Value::as_bool) == Some(true) {
+                audit_web(
+                    shared,
+                    &session.harness,
+                    &session.site,
+                    "fill",
+                    false,
+                    "敏感字段填写已阻止",
+                );
+                return web_error(
+                    "web_action_unsupported",
+                    "目标是密码、验证码、令牌或支付字段，必须由用户在隔离窗口中填写",
+                );
+            }
             audit_web(
                 shared,
                 &session.harness,
@@ -463,7 +568,7 @@ fn web_fill(shared: &Shared, session: &WebSession, args: &Value) -> Value {
                 true,
                 "已填写普通字段（值不记录）",
             );
-            pman_core::ipc::result_ok(json!({"ok": true, "result": raw_result(&raw)}))
+            pman_core::ipc::result_ok(json!({"ok": true, "result": result}))
         }
         Err(error) => web_error("request_failed", &error),
     }
@@ -475,7 +580,11 @@ fn web_wait(shared: &Shared, session: &WebSession, args: &Value) -> Value {
     }
     let selector = args.get("selector").and_then(Value::as_str).unwrap_or("");
     let text = args.get("text").and_then(Value::as_str).unwrap_or("");
-    let timeout_ms = args.get("timeout_ms").and_then(Value::as_u64).unwrap_or(3000).min(10_000);
+    let timeout_ms = args
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(3000)
+        .min(10_000);
     if selector.len() > 512 || selector.contains("javascript:") || text.len() > 512 {
         return web_error("invalid_request", "等待参数无效");
     }
@@ -484,7 +593,14 @@ fn web_wait(shared: &Shared, session: &WebSession, args: &Value) -> Value {
     // Waiting happens inside the page script; give the channel extra headroom.
     match execute_script(shared, session, &script) {
         Ok(raw) => {
-            audit_web(shared, &session.harness, &session.site, "wait", true, "等待完成");
+            audit_web(
+                shared,
+                &session.harness,
+                &session.site,
+                "wait",
+                true,
+                "等待完成",
+            );
             pman_core::ipc::result_ok(json!({"ok": true, "result": raw_result(&raw)}))
         }
         Err(error) => web_error("request_failed", &error),
@@ -503,7 +619,11 @@ fn check_origin(shared: &Shared, session: &WebSession) -> Result<String, Value> 
 }
 
 fn raw_result(raw: &str) -> Value {
-    serde_json::from_str(raw).unwrap_or_else(|_| json!(raw))
+    match serde_json::from_str(raw) {
+        Ok(Value::String(inner)) => serde_json::from_str(&inner).unwrap_or(Value::String(inner)),
+        Ok(value) => value,
+        Err(_) => json!(raw),
+    }
 }
 
 /// Fixed page scripts. The sensitive-field heuristic mirrors
@@ -572,20 +692,39 @@ const SUMMARY_SCRIPT: &str = r##"(() => {
 const CLICK_BODY: &str = r#"
   const el = document.querySelector(args.selector);
   if (!el) return { found: false };
-  el.scrollIntoView({ block: "center" });
-  el.click();
-  return { found: true, url: location.href };
+  const anchor = el.closest && el.closest("a[href]");
+  if (!anchor || anchor.hasAttribute("download") || anchor.target === "_blank") {
+    return { found: true, blocked: true };
+  }
+  const target = new URL(anchor.href, location.href);
+  if (!["http:", "https:"].includes(target.protocol) || target.origin !== args.origin) {
+    return { found: true, blocked: true };
+  }
+  anchor.scrollIntoView({ block: "center" });
+  location.assign(target.href);
+  return { found: true, blocked: false, path: target.pathname };
 "#;
 
 const FILL_BODY: &str = r#"
   const el = document.querySelector(args.selector);
   if (!el) return { found: false };
+  const SENSITIVE = ["password","passwd","pwd","passcode","pass_word","otp","verification","verify_code","one-time-code","one_time_code","token","secret","api_key","apikey","card","cvv","cvc","captcha","密码","验证码","卡号","令牌","短信校验"];
+  const type = (el.getAttribute("type") || "text").toLowerCase();
+  const autocomplete = (el.getAttribute("autocomplete") || "").toLowerCase();
+  const label = el.labels && el.labels[0] ? el.labels[0].innerText : "";
+  const hay = [el.name, el.id, el.getAttribute("aria-label"), el.placeholder, label].filter(Boolean).join(" ").toLowerCase();
+  if (type === "password" || autocomplete.startsWith("cc-") || SENSITIVE.some(k => hay.includes(k))) {
+    return { found: true, blocked: true };
+  }
+  if (!["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) {
+    return { found: true, blocked: true };
+  }
   const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : el.tagName === "SELECT" ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
   setter.call(el, args.value);
   el.dispatchEvent(new Event("input", { bubbles: true }));
   el.dispatchEvent(new Event("change", { bubbles: true }));
-  return { found: true };
+  return { found: true, blocked: false };
 "#;
 
 const WAIT_BODY: &str = r#"
@@ -599,3 +738,24 @@ const WAIT_BODY: &str = r#"
     return { found: false };
   })();
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn click_script_only_follows_same_origin_navigation_links() {
+        assert!(CLICK_BODY.contains("closest(\"a[href]\")"));
+        assert!(CLICK_BODY.contains("target.origin !== args.origin"));
+        assert!(CLICK_BODY.contains("hasAttribute(\"download\")"));
+        assert!(!CLICK_BODY.contains("el.click()"));
+    }
+
+    #[test]
+    fn fill_script_rejects_sensitive_targets_without_trusting_the_caller() {
+        assert!(FILL_BODY.contains("type === \"password\""));
+        assert!(FILL_BODY.contains("autocomplete.startsWith(\"cc-\")"));
+        assert!(FILL_BODY.contains("SENSITIVE.some"));
+        assert!(FILL_BODY.contains("blocked: true"));
+    }
+}

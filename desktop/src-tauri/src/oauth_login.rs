@@ -1,6 +1,7 @@
-//! OAuth login commands (GitLab PKCE / GitHub device flow). Same isolation
-//! rules as the E10 flow: epoch + generation binding, cancel-safe, and tokens
-//! never cross the management UI boundary.
+//! OAuth login commands (authorization-code flows / GitHub device flow /
+//! E10 platform flow). Same isolation rules as the Connection flow: epoch +
+//! generation binding, cancel-safe, and tokens never cross the management UI
+//! boundary.
 use crate::service::{PendingOAuth, PendingOAuthFlow, Shared};
 use pman_core::oauth::{OAuthError, OAuthStart};
 use serde_json::{json, Value};
@@ -15,13 +16,21 @@ fn oauth_error(error: OAuthError) -> String {
 
 /// OAuth is only offered where the provider flow is real; anything else keeps
 /// the Token path. Provider detection matches the read-only check rules.
-fn oauth_provider_for(site: &pman_core::SiteSummary, details: &pman_core::ConnectionDetails) -> Option<String> {
+fn oauth_provider_for(
+    site: &pman_core::SiteSummary,
+    details: &pman_core::ConnectionDetails,
+) -> Option<String> {
+    if site.auth_type == "e10" || details.provider.as_deref() == Some("e10") {
+        return Some("e10".into());
+    }
     if site.auth_type == "password" || site.site_url.is_empty() {
         return None;
     }
     match details.provider.as_deref() {
         Some("github") => return Some("github".into()),
         Some("gitlab") => return Some("gitlab".into()),
+        Some("microsoft") => return Some("microsoft".into()),
+        Some("google") => return Some("google".into()),
         Some(_) => return None,
         None => {}
     }
@@ -29,11 +38,23 @@ fn oauth_provider_for(site: &pman_core::SiteSummary, details: &pman_core::Connec
         .ok()
         .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
         .unwrap_or_default();
-    match host.as_str() {
-        "api.github.com" => Some("github".into()),
-        "gitlab.com" | "www.gitlab.com" => Some("gitlab".into()),
-        host if host.ends_with(".gitlab.com") => Some("gitlab".into()),
+    // Gitee is token-only (its exchange requires a client secret) and E10 is
+    // never inferred from a generic host — both stay off the OAuth path here.
+    match pman_core::oauth::infer_provider_for_host(&host) {
+        Some(provider @ ("github" | "gitlab" | "microsoft" | "google")) => {
+            Some(provider.to_owned())
+        }
         _ => None,
+    }
+}
+
+fn default_scope(provider: &str) -> String {
+    match provider {
+        "github" => "read:user".into(),
+        "gitlab" => "read_user".into(),
+        "microsoft" => "User.Read offline_access".into(),
+        "google" => "openid email profile".into(),
+        _ => String::new(),
     }
 }
 
@@ -46,7 +67,7 @@ pub async fn oauth_begin(
 ) -> Result<OAuthStart, String> {
     login_ensure_main(&window)?;
     let auth_epoch = begin_management(&state)?;
-    let (site, details, generation) = {
+    let (site, details, generation, agent_type) = {
         let core = state.core.lock().map_err(|_| "服务状态不可用")?;
         let site = core
             .vault
@@ -56,46 +77,97 @@ pub async fn oauth_begin(
             .find(|site| site.alias == alias)
             .ok_or("连接不存在")?;
         let details = core.vault.details(&alias).map_err(|_| "无法读取连接")?;
-        (site, details, core.vault.generation())
+        // E10 keeps the agent identity bound to the connection's session.
+        let agent_type = core
+            .vault
+            .get_site_secret(&alias)
+            .ok()
+            .and_then(|secret| {
+                secret
+                    .get("agent_type")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "Codex".into());
+        (site, details, core.vault.generation(), agent_type)
     };
-    let provider = oauth_provider_for(&site, &details).ok_or(
-        "oauth_unsupported: 此服务没有已确认的免密 OAuth 流程，请使用 Token 接入",
-    )?;
-    let client_id = details
-        .oauth_client_id
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(
-            "oauth_unconfigured: 请先在此连接中保存 OAuth 应用 client_id（无需 client secret）",
-        )?;
+    let provider = oauth_provider_for(&site, &details)
+        .ok_or("oauth_unsupported: 此服务没有已确认的免密 OAuth 流程，请使用 Token 接入")?;
+    // E10's platform authorization needs neither a client id nor a secret.
+    let client_id = if provider == "e10" {
+        None
+    } else {
+        Some(
+            details
+                .oauth_client_id
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or(
+                    "oauth_unconfigured: 请先在此连接中保存 OAuth 应用 client_id（无需 client secret）",
+                )?,
+        )
+    };
     let scope = details
         .oauth_scope
         .clone()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
-            if provider == "github" {
-                "read:user".into()
-            } else {
-                "read_user".into()
-            }
-        });
+        .unwrap_or_else(|| default_scope(&provider));
     {
         let flows = state.oauth_flows.lock().map_err(|_| "登录状态不可用")?;
         if flows.values().any(|pending| pending.alias == alias) {
             return Err("此连接已有 OAuth 登录正在进行，请先完成或取消".into());
         }
     }
-    let flow = if provider == "gitlab" {
-        let target = pman_core::oauth::normalize_origin(&site.site_url).map_err(oauth_error)?;
-        PendingOAuthFlow::GitLab(
-            pman_core::oauth::GitLabOAuthFlow::begin(&target, client_id.trim(), &scope)
+    let flow = match provider.as_str() {
+        "gitlab" => {
+            let target = pman_core::oauth::normalize_origin(&site.site_url).map_err(oauth_error)?;
+            PendingOAuthFlow::AuthCode(
+                pman_core::oauth::AuthorizationCodeFlow::begin(
+                    &target,
+                    client_id.as_deref().unwrap_or_default().trim(),
+                    &scope,
+                )
                 .map_err(oauth_error)?,
-        )
-    } else {
-        PendingOAuthFlow::GitHub(
-            pman_core::oauth::GitHubDeviceFlow::begin(client_id.trim(), &scope)
+            )
+        }
+        "microsoft" => {
+            let tenant = details
+                .oauth_tenant
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("organizations");
+            PendingOAuthFlow::AuthCode(
+                pman_core::oauth::AuthorizationCodeFlow::microsoft(
+                    tenant,
+                    client_id.as_deref().unwrap_or_default().trim(),
+                    &scope,
+                )
                 .map_err(oauth_error)?,
-        )
+            )
+        }
+        "google" => PendingOAuthFlow::AuthCode(
+            pman_core::oauth::AuthorizationCodeFlow::google(
+                client_id.as_deref().unwrap_or_default().trim(),
+                &scope,
+            )
+            .map_err(oauth_error)?,
+        ),
+        "e10" => {
+            let target = pman_core::oauth::normalize_origin(&site.site_url).map_err(oauth_error)?;
+            PendingOAuthFlow::E10(
+                pman_core::oauth::E10OAuthFlow::begin(&target, agent_type.trim())
+                    .map_err(oauth_error)?,
+            )
+        }
+        _ => PendingOAuthFlow::Device(
+            pman_core::oauth::GitHubDeviceFlow::begin(
+                client_id.as_deref().unwrap_or_default().trim(),
+                &scope,
+            )
+            .map_err(oauth_error)?,
+        ),
     };
     let info = flow.info();
     {
@@ -158,16 +230,29 @@ pub async fn oauth_complete(
             pending.flow.take().ok_or("该登录事务已在处理中")?,
         )
     };
-    let outcome =
-        tauri::async_runtime::spawn_blocking(move || flow.complete(std::time::Duration::from_secs(600)))
-            .await
-            .map_err(|_| "登录检查失败")?;
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        flow.complete(std::time::Duration::from_secs(600))
+    })
+    .await
+    .map_err(|_| "登录检查失败")?;
     state
         .oauth_flows
         .lock()
         .map_err(|_| "登录状态不可用")?
         .remove(&session_id);
     login_ensure_main(&window)?;
+    // The platform did not echo pman's state: the callback cannot be
+    // verified, so nothing was exchanged. Surface a distinct status so the
+    // UI can fall back to the isolated WebView2 login (skill contract).
+    if let Err(OAuthError::StateNotReturned) = &outcome {
+        let _ = app.emit("connections-changed", ());
+        return Ok(json!({
+            "status": "state_not_returned",
+            "provider": provider,
+            "message": "平台未回传 OAuth state，已终止本次授权；请改用浏览器窗口登录",
+        }));
+    }
+    let outcome = outcome.map_err(oauth_error)?;
     let account = {
         let mut management = state.management.lock().map_err(|_| "管理状态不可用")?;
         ensure_epoch(&mut management, auth_epoch)?;
@@ -178,12 +263,50 @@ pub async fn oauth_complete(
         if generation != core.vault.generation() {
             return Err("stale_login: 登录期间连接或授权发生变化，请重新开始".into());
         }
-        let result = outcome.map_err(oauth_error)?;
-        let account = result.account.clone();
-        core.vault
-            .finish_oauth_login(&alias, &provider, &result)
-            .map_err(|e| e.to_string())?;
-        account
+        match outcome {
+            pman_core::oauth::LoginOutcome::Tokens(result) => {
+                let account = result.account.clone();
+                core.vault
+                    .finish_oauth_login(&alias, &provider, &result)
+                    .map_err(|e| e.to_string())?;
+                account
+            }
+            pman_core::oauth::LoginOutcome::E10Session(result) => {
+                let metadata = result.metadata.clone();
+                crate::login::ensure_e10_account(&core.vault, &alias, &metadata)
+                    .map_err(|e| e.to_string())?;
+                let host = tauri::Url::parse(&result.origin)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_owned))
+                    .unwrap_or_default();
+                // Same secret shape as the WebView2 E10 login so the existing
+                // request envelope and session checks keep working.
+                let secret = json!({
+                    "origin": result.origin,
+                    "provider": "e10",
+                    "agent_type": result.agent_type,
+                    "version": result.version,
+                    "account_id": metadata.account_id,
+                    "cookies": [{
+                        "name": "ETEAMSID",
+                        "value": result.eteamsid.as_str(),
+                        "domain": host,
+                        "path": "/",
+                        "host_only": true
+                    }]
+                });
+                core.vault
+                    .update_secret(&alias, secret)
+                    .map_err(|e| e.to_string())?;
+                crate::login::record_e10_metadata(&mut core.vault, &alias, &metadata)
+                    .map_err(|e| e.to_string())?;
+                if metadata.user_name.is_empty() {
+                    metadata.user_id
+                } else {
+                    metadata.user_name
+                }
+            }
+        }
     };
     let _ = app.emit("connections-changed", ());
     Ok(json!({
@@ -286,7 +409,7 @@ pub async fn oauth_refresh(
     {
         let mut core = state.core.lock().map_err(|_| "服务状态不可用")?;
         core.vault
-            .finish_e10_evidence(&alias, "verified", None, "OAuth 令牌已刷新", None)
+            .finish_authflow_evidence(&alias, "verified", None, "OAuth 令牌已刷新", None)
             .map_err(|e| e.to_string())?;
     }
     let _ = window.app_handle().emit("connections-changed", ());

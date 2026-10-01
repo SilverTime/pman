@@ -13,8 +13,8 @@ const ERROR_TEXT = Object.freeze({
   unknown_site: 'pman 中未找到指定连接。',
   site_inactive: 'pman 连接不可用；请在桌面端检查登录状态。',
   rate_limited: 'pman 请求频率超过授权限制。',
-  expired: 'E10 登录已失效；请在 pman 中重新登录。',
-  forbidden: 'E10 拒绝访问；请检查账号权限。',
+  expired: '连接登录已失效；请在 pman 中重新登录。',
+  forbidden: '服务拒绝访问；请检查账号权限。',
   origin_mismatch: 'pman 连接地址与目标平台不一致。',
   broker_unavailable: '无法连接 pman AI 服务；请确认桌面程序正在运行。',
   invalid_response: 'pman 返回了不兼容的响应。',
@@ -50,7 +50,7 @@ export function createPmanClient(options = {}) {
     ? join(process.env.LOCALAPPDATA, 'pman Vault', 'pm.exe') : null;
   const executable = options.executable || process.env.PMAN_EXECUTABLE || installedExecutable;
   const clientId = options.clientId || process.env.PMAN_CLIENT_ID;
-  const site = options.site || process.env.PMAN_E10_SITE || 'e10-i18n';
+  const site = options.site || process.env.PMAN_SITE;
   const expectedOrigin = options.expectedOrigin ? originOf(options.expectedOrigin) : null;
   // Explicit argument prefix supports test launchers. Never interpolated into a shell.
   const executableArgs = options.executableArgs || [];
@@ -60,6 +60,9 @@ export function createPmanClient(options = {}) {
       || (options.expectedOrigin && !expectedOrigin)) throw new PmanError('invalid_request');
 
   function invoke(payload) {
+    let requestJson;
+    try { requestJson = JSON.stringify(payload); }
+    catch { return Promise.reject(new PmanError('invalid_request')); }
     return new Promise((resolve, reject) => {
       let child;
       try {
@@ -101,7 +104,7 @@ export function createPmanClient(options = {}) {
         if (code !== 0) { finish(new PmanError('request_failed')); return; }
         finish(null, result);
       });
-      child.stdin.end(JSON.stringify(payload));
+      child.stdin.end(requestJson);
     });
   }
 

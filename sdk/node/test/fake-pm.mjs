@@ -11,18 +11,18 @@ if (clientId === 'broken-json') {
 }
 if (request.operation === 'active_context') {
   response = { ...envelope, context: {
-    origin: clientId === 'wrong-origin' ? 'https://wrong.example' : 'https://www.e-cology.com.cn',
-    auth_type: 'e10', status: 'connected', account_id: 'account-fixture',
+    origin: clientId === 'wrong-origin' ? 'https://wrong.example' : 'https://office.example.test',
+    auth_type: 'authflow', status: 'connected', account_id: 'account-fixture',
     cookie: 'synthetic-secret-not-metadata', user_id: 'user-fixture',
   } };
 } else if (request.operation === 'resolve_scenario') {
   response = request.context?.environment === 'test'
-    ? { ...envelope, status: 'resolved', match: { site: 'e10-i18n', capability: 'e10.i18n.test', environment: 'test', account: 'fixture' } }
+    ? { ...envelope, status: 'resolved', match: { site: 'office-api', capability: 'office.api.test', environment: 'test', account: 'fixture' } }
     : { ...envelope, ok: false, error_code: 'scenario_ambiguous', status: 'ambiguous', matches: [{ environment: 'test' }, { environment: 'baseline' }] };
 } else if (request.operation === 'http') {
   if (request.request.path === '/pending') {
     response = { ...envelope, ok: false, error_code: 'pending_approval', req_id: 'approval-fixture', error: 'synthetic-secret-in-unsafe-error' };
-  } else if (request.expected_origin !== 'https://www.e-cology.com.cn') {
+  } else if (request.expected_origin !== 'https://office.example.test') {
     response = { ...envelope, ok: false, error_code: 'origin_mismatch' };
   } else {
     const endpoint = request.request.path.split('/').pop();
@@ -31,7 +31,7 @@ if (request.operation === 'active_context') {
       getFrontSecModule: { list: [{ id: 'ebdfpage', content: 'Synthetic page' }] },
       batchTrans: { ids: '12345678', list: "getLabel('12345678', '合成词条')" },
       exportLabelSql2: { data: { mysql: '-- synthetic SQL only' } },
-      getE10LabelListDataKey: { displayData: [] },
+      getLabelListData: { displayData: [] },
       commitSQLFileToGit: { success: true },
     };
     response = { ...envelope, status_code: 200, body_json: {
